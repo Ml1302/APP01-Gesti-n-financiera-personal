@@ -1,0 +1,240 @@
+@startuml
+!theme plain
+
+title Modelo Entidad-Relación — Micro-ERP Financiero
+
+entity Usuarios {
+  * id : INT <<PK>>
+  --
+  * email : VARCHAR <<UNIQUE>>
+  * password_hash : VARCHAR
+  * nombre : VARCHAR
+  * rol : ENUM
+  * moneda_base : VARCHAR
+  zona_horaria : VARCHAR
+  email_verificado : BOOLEAN
+  nlp_diario_usado : INT
+  nlp_ultimo_reset : DATE
+  * created_at : TIMESTAMP
+}
+
+entity Categorias {
+  * id : INT <<PK>>
+  --
+  * nombre : VARCHAR
+  * tipo : ENUM
+  usuario_id : INT <<FK>>
+  * activa : BOOLEAN
+}
+
+entity Transacciones {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * categoria_id : INT <<FK>>
+  * tipo : ENUM
+  * monto : DECIMAL
+  * moneda : VARCHAR
+  descripcion : TEXT
+  * fecha : DATE
+  origen_nlp : BOOLEAN
+  raw_nlp : TEXT
+  contrapartida_id : INT <<FK>>
+  activo : BOOLEAN
+  deleted_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Presupuestos {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * categoria_id : INT <<FK>>
+  * limite : DECIMAL
+  * periodo : ENUM
+  * mes : YEAR_MONTH
+  * created_at : TIMESTAMP
+}
+
+entity Prestamos {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  promotor_id : INT <<FK>>
+  * deudor : VARCHAR
+  * monto_original : DECIMAL
+  * moneda : VARCHAR
+  * interes : DECIMAL
+  * frecuencia_pago : ENUM
+  * cuotas_totales : INT
+  * cuotas_restantes : INT
+  * saldo_pendiente : DECIMAL
+  * fecha_inicio : DATE
+  fecha_proximo_pago : DATE
+  * estado : ENUM
+  penalidad_diaria : DECIMAL
+  * version : INT
+  * activo : BOOLEAN
+  deleted_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Condiciones_Prestamo {
+  * id : INT <<PK>>
+  --
+  * prestamo_id : INT <<FK>>
+  * nombre : VARCHAR
+  * tipo_condicion : ENUM
+  * trigger_campo : VARCHAR
+  * trigger_operador : VARCHAR
+  * trigger_valor : VARCHAR
+  * efecto_tipo : ENUM
+  * efecto_valor : DECIMAL
+  * efecto_unidad : ENUM
+  * prioridad : INT
+  * activa : BOOLEAN
+  descripcion : TEXT
+  deleted_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Pagos {
+  * id : INT <<PK>>
+  --
+  * prestamo_id : INT <<FK>>
+  condicion_aplicada_id : INT <<FK>>
+  pago_reversa_id : INT <<FK>>
+  motivo_reversa : TEXT
+  idempotency_key : VARCHAR <<UNIQUE>>
+  * monto : DECIMAL
+  * monto_interes : DECIMAL
+  * monto_capital : DECIMAL
+  * tasa_interes_aplicada : DECIMAL
+  * moneda : VARCHAR
+  * fecha_pago : DATE
+  * nro_cuota : INT
+  * activo : BOOLEAN
+  deleted_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Comisiones {
+  * id : INT <<PK>>
+  --
+  * promotor_id : INT <<FK>>
+  * prestamo_id : INT <<FK>>
+  * pago_id : INT <<FK>>
+  * tasa_comision : DECIMAL
+  * monto_comision : DECIMAL
+  * moneda : VARCHAR
+  * pagada : BOOLEAN
+  * activo : BOOLEAN
+  deleted_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Tasas_Cambio {
+  * id : INT <<PK>>
+  --
+  * moneda_origen : VARCHAR
+  * moneda_destino : VARCHAR
+  * tasa : DECIMAL
+  * fuente : VARCHAR
+  * fecha : DATE <<UNIQUE>>
+}
+
+entity Idempotencia_Keys {
+  * id : INT <<PK>>
+  --
+  * key : VARCHAR <<UNIQUE>>
+  * recurso : VARCHAR
+  recurso_id : INT
+  * resultado : ENUM
+  respuesta_hash : VARCHAR
+  * expired_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Reset_Tokens {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * token : VARCHAR <<UNIQUE>>
+  * tipo : ENUM
+  * usado : BOOLEAN
+  * expired_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Notificaciones {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * tipo : ENUM
+  * titulo : VARCHAR
+  * mensaje : TEXT
+  * leida : BOOLEAN
+  * fecha_evento : TIMESTAMP
+  recurso : VARCHAR
+  recurso_id : INT
+  * created_at : TIMESTAMP
+}
+
+entity Config_Notificaciones {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>> <<UNIQUE>>
+  * push_habilitado : BOOLEAN
+  * email_habilitado : BOOLEAN
+  * recordatorio_pago_dias_antes : INT
+  * resumen_semanal : BOOLEAN
+  * updated_at : TIMESTAMP
+}
+
+entity Export_Logs {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * formato : ENUM
+  * alcance : ENUM
+  * archivo_url : VARCHAR
+  tamano_bytes : INT
+  * created_at : TIMESTAMP
+  * expired_at : TIMESTAMP
+}
+
+entity Configuraciones {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>> <<UNIQUE>>
+  * moneda_base : VARCHAR
+  * tasa_comision_promotor : DECIMAL
+  * notificaciones : BOOLEAN
+  * updated_at : TIMESTAMP
+}
+
+' --- Relaciones ---
+
+Usuarios ||--o{ Categorias : tiene
+Usuarios ||--o{ Transacciones : registra
+Usuarios ||--o{ Presupuestos : define
+Usuarios ||--o{ Prestamos : administra
+Usuarios ||--o{ Comisiones : recibe
+Usuarios ||--o{ Notificaciones : recibe
+Usuarios ||--|| Config_Notificaciones : configura
+Usuarios ||--o{ Export_Logs : solicita
+Usuarios ||--o{ Reset_Tokens : solicita
+Usuarios ||--|| Configuraciones : tiene
+
+Categorias ||--o{ Transacciones : clasifica
+Categorias ||--o{ Presupuestos : limita
+
+Prestamos ||--o{ Condiciones_Prestamo : tiene
+Prestamos ||--o{ Pagos : recibe
+Prestamos ||--o{ Comisiones : genera
+
+Pagos ||--o{ Comisiones : genera
+Pagos ||--|| Condiciones_Prestamo : aplica
+Pagos ||--|| Pagos : revierte
+
+@enduml

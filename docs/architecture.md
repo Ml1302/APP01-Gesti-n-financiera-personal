@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.5 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.6 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo. El diseño prioriza una infraestructura de costo cero, alta disponibilidad mediante contenedores y procesamiento de lenguaje natural (NLP) integrado.
 
@@ -73,6 +73,29 @@ El sistema sigue una arquitectura cliente-servidor desacoplada, con comunicació
 3. El cliente incluye `Authorization: Bearer <accessToken>` en cada petición.
 4. Al expirar el access token, el cliente llama a `POST /auth/refresh` con el refresh token.
 5. El backend invalida el refresh token anterior y emite un nuevo par.
+
+#### Gestión de Sesiones
+
+Cada refresh token representa una sesión activa. El usuario puede ver y gestionar sus sesiones desde configuración:
+
+| Método | Ruta | Acceso | Descripción |
+|--------|------|--------|-------------|
+| `GET` | `/auth/sessions` | Autenticado | Listar sesiones activas (dispositivo, IP, fecha, última actividad) |
+| `DELETE` | `/auth/sessions/:id` | Autenticado | Cerrar sesión específica |
+| `DELETE` | `/auth/sessions` | Autenticado | Cerrar todas las demás sesiones |
+
+El límite máximo de sesiones concurrentes por usuario es **10**. Al superarlo, la sesión más antigua se invalida automáticamente.
+
+#### Autenticación de Dos Factores (2FA)
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Disponibilidad** | Planeado para v1.1 |
+| **Método** | TOTP (Time-based One-Time Password) vía apps como Google Authenticator o Authy |
+| **Implementación** | `speakeasy` (generación de secretos) + `qrcode` (código QR para vincular app) |
+| **Códigos de respaldo** | 8 códigos de 8 dígitos generados al activar 2FA, cada uno de un solo uso |
+| **Flujo** | Login → contraseña → código TOTP → JWT |
+| **Recuperación** | Códigos de respaldo o desactivación por email verificado |
 
 ### Capa de Datos y Servicios Externos
 
@@ -746,8 +769,9 @@ El frontend muestra las condiciones extraídas en la vista previa para que el us
 | Rate limiting | 100 req/min por IP (público) · 500 req/min por usuario (autenticado) |
 | Validación | Class-validator (NestJS) en todos los DTOs |
 | SQL Injection | Prevenido por ORM (TypeORM / Prisma) |
-| CORS | Solo orígenes permitidos (Vercel domain) |
-| Logs | Sin datos sensibles (no passwords, no tokens completos) |
+| CORS | Solo orígenes permitidos (Vercel domain, dominios de desarrollo local) |
+| CSRF | Protección mediante `SameSite=Strict` en cookies + token CSRF para endpoints que usen cookies en vez de JWT |
+| Logs | Sin datos sensibles (no passwords, no tokens completos, no datos financieros) |
 
 ### 7.3. Disponibilidad
 
@@ -1407,16 +1431,220 @@ Ejemplo de entrada en OpenAPI:
 
 ## 12. Diagramas (Referencia)
 
-Para una representación visual de la arquitectura, consultar:
+Los siguientes diagramas PlantUML están disponibles en `docs/diagrams/`:
 
-- `docs/diagrams/architecture-overview.puml` — Diagrama C4 de contexto y contenedores (PlantUML)
-- `docs/diagrams/entity-model.puml` — Diagrama entidad-relación
+| Archivo | Descripción |
+|---------|-------------|
+| `docs/diagrams/architecture-overview.puml` | Diagrama C4 de contexto y contenedores |
+| `docs/diagrams/entity-model.puml` | Diagrama entidad-relación completo |
 
-> **Nota:** Los diagramas se crearán durante la fase de diseño detallado previa a la implementación.
+Para generar imágenes desde los diagramas:
+
+```bash
+# Con PlantUML instalado localmente
+plantuml docs/diagrams/*.puml
+
+# O usando el servidor online: https://www.plantuml.com/plantuml/uml/<codigo>
+```
 
 ---
 
-## 13. Glosario
+## 13. Estrategia de Pruebas (Testing)
+
+### 13.1. Pirámide de Pruebas
+
+```
+         ╱╲
+        ╱  ╲          E2E (Cypress / Playwright)
+       ╱    ╲         Pruebas de integración
+      ╱──────╲
+     ╱        ╲
+    ╱          ╲      Pruebas de componentes / API (NestJS)
+   ╱────────────╲
+  ╱              ╲
+ ╱                ╲   Pruebas unitarias (Jest)
+╱──────────────────╲
+```
+
+### 13.2. Tipos de Prueba
+
+| Tipo | Framework | Cobertura | Objetivo |
+|------|-----------|-----------|----------|
+| **Unitarias** | Jest | ≥ 80% | Servicios, helpers, validadores, cálculo de intereses |
+| **Componentes/API** | Supertest + Jest | ≥ 70% | Controladores, DTOs, autenticación, CRUD |
+| **Integración** | Testcontainers | Crítico | Flujo completo de pago, NLP, concurrencia, idempotencia |
+| **E2E** | Cypress / Playwright | Rutas críticas | Login, registro de pago, NLP, dashboard |
+| **Snapshot** | Jest | UI | Componentes visuales (PWA) |
+
+### 13.3. Qué Probar (por Prioridad)
+
+#### Prioridad Crítica (fallo = pérdida de dinero)
+
+```
+✓ Idempotencia: llamar 2× el mismo pago produce 1 registro
+✓ Concurrencia: 2 pagos simultáneos mantienen saldo correcto
+✓ Redondeo: S/ 100 / 3 cuotas = 33.33 + 33.33 + 33.34
+✓ Soft delete: DELETE no borra físicamente
+✓ Inmutabilidad: un pago no puede editarse
+✓ Condiciones: evaluación correcta de triggers y efectos
+```
+
+#### Prioridad Alta
+
+```
+✓ Autenticación: login, refresh token, cierre de sesión
+✓ Autorización: admin no accede como promotor y viceversa
+✓ NLP: parseo correcto, fallback en JSON inválido
+✓ Multimoneda: conversión y almacenamiento de tasas
+✓ Offline: cola de operaciones y sincronización
+```
+
+#### Prioridad Media
+
+```
+✓ Paginación: metadata correcta, límites
+✓ Filtros: combinación de parámetros
+✓ Exportación: formato CSV/PDF correcto
+✓ Notificaciones: creación y entrega
+✓ Health check: respuesta correcta en estados ok/degradado
+```
+
+### 13.4. Datos de Prueba
+
+- **Seed data:** Conjunto fijo de usuarios, préstamos, pagos y condiciones precargados para tests de integración.
+- **Fabricators:** Funciones generadoras de entidades (con `faker.js` para datos realistas).
+- **Aislamiento:** Cada test crea y destruye sus datos (transacciones con rollback o bases efímeras).
+
+### 13.5. CI/CD
+
+```
+Push / PR a main:
+  1. Lint (ESLint + Prettier)
+  2. Type check (TypeScript)
+  3. Tests unitarios + componentes (Jest)
+  4. Tests de integración (Testcontainers)
+  5. Build
+  6. (Opcional) Tests E2E en staging
+```
+
+---
+
+## 14. Hoja de Ruta (Roadmap)
+
+| Fase | Versión | Hitos | Estado |
+|------|---------|-------|--------|
+| **Fase 0 — Fundación** | v0.1.0 | Documentación, modelo de datos, configuración del proyecto | ✅ Completado |
+| **Fase 1 — Núcleo Funcional** | v0.2.0 | API REST (CRUD), autenticación JWT, gestión de transacciones, categorías, presupuestos | ⏳ Pendiente |
+| **Fase 2 — Préstamos** | v0.3.0 | Gestión de préstamos, pagos, condiciones, comisiones | ⏳ Pendiente |
+| **Fase 3 — NLP** | v0.4.0 | Integración con Gemini API, prompts, validación, fallback manual | ⏳ Pendiente |
+| **Fase 4 — Dashboard** | v0.5.0 | Dashboards de admin y promotor, proyecciones, exportación de datos | ⏳ Pendiente |
+| **Fase 5 — Multimoneda** | v0.6.0 | Soporte multimoneda, cron de tasas, conversión en dashboard | ⏳ Pendiente |
+| **Fase 6 — Frontend Web** | v0.7.0 | PWA completa, offline sync, notificaciones push | ⏳ Pendiente |
+| **Fase 7 — Madurez** | v0.8.0 | Pruebas E2E, auditoría de seguridad, rendimiento, documentación final | ⏳ Pendiente |
+| **Fase 8 — Mobile** | v1.0.0 | Apps iOS y Android, publicación en stores | 🔮 Futuro |
+| **Fase 9 — Escalabilidad** | v1.1.0 | 2FA, notificaciones email, mejoras de rendimiento | 🔮 Futuro |
+
+---
+
+## 15. Otras Consideraciones
+
+### 15.1. Internacionalización (i18n)
+
+| Aspecto | Decisión |
+|---------|----------|
+| **Idioma principal** | Español (es-PE) |
+| **Framework** | `next-intl` (Next.js) o `i18next` (React) |
+| **Alcance inicial** | UI del frontend (etiquetas, mensajes, fechas, monedas) |
+| **Backend** | Mensajes de error en español; los códigos de error son invariantes (ej. `PAYMENT_DUPLICATED`) |
+| **Traducciones futuras** | Inglés (en), Portugués (pt) — planeado para v1.0 |
+| **Formato de fechas** | ISO 8601 en API, formato local en UI |
+| **Formato de moneda** | Símbolo según locale (S/, $, €) en UI |
+
+### 15.2. Compilación Multiplataforma
+
+| Plataforma | Framework | Distribución | Build |
+|------------|-----------|-------------|-------|
+| **Web (PWA)** | React / Next.js | Vercel CDN, instalable como PWA | `npm run build` |
+| **iOS** | React Native o Flutter | App Store | Build nativo con Xcode |
+| **Android** | React Native o Flutter | Google Play | Build nativo con Gradle |
+| **API / Backend** | NestJS + Node.js | Docker (Oracle Linux) | `docker-compose build` |
+
+**Estrategia:** El frontend web (PWA) se desarrolla primero. Las apps nativas (iOS/Android) comparten la misma API y se construyen sobre el mismo código base (React Native) o desde cero (Flutter), según la decisión final de framework.
+
+### 15.3. Preguntas Frecuentes (FAQ)
+
+| Pregunta | Respuesta |
+|----------|-----------|
+| **¿Cómo se protegen mis datos financieros?** | Todo el tráfico viaja por HTTPS TLS 1.3. Las contraseñas se almacenan con bcrypt. Los tokens JWT expiran cada 15 minutos. Los datos en reposo están cifrados por Oracle Cloud. |
+| **¿Qué pasa si Gemini no está disponible?** | El sistema detecta la falla, abre un circuit breaker por 10 minutos y permite la entrada manual de datos. Los datos no se pierden. |
+| **¿Puedo usar la app sin internet?** | Sí. La PWA funciona offline. Las operaciones se encolan localmente y se sincronizan al recuperar conexión. |
+| **¿Cómo se corrige un pago registrado por error?** | Los pagos son inmutables. Para corregir, se registra un pago de reversión (con motivo) y luego el pago correcto. Ambos quedan en el historial. |
+| **¿Qué monedas están soportadas?** | Cualquier moneda con código ISO 4217. Las tasas de cambio se sincronizan diariamente desde ExchangeRate-API. |
+| **¿Puedo exportar mis datos?** | Sí, en formato CSV, PDF o JSON. Las exportaciones están disponibles por 24 horas. |
+| **¿Cómo recupero mi contraseña?** | Usa "Olvidé mi contraseña" en el login. Recibirás un enlace por email válido por 1 hora. |
+
+### 15.4. Política de Retención de Datos
+
+| Tipo de Dato | Tiempo de Retención | Acción al Vencimiento |
+|-------------|---------------------|----------------------|
+| Transacciones, Préstamos, Pagos | Indefinido (historial financiero) | Nunca se eliminan |
+| Log de auditoría | 5 años | Purga anual |
+| Idempotency Keys | 24 horas | Purga automática (cron diario) |
+| Reset Tokens | 1 hora (TTL) | Purga automática (cron diario) |
+| Registros eliminados (soft delete) | 30 días | Purga física mensual |
+| Logs de aplicación | 90 días | Rotación automática |
+| Sesiones (refresh tokens) | 7 días | Expiración natural |
+| Uso de NLP (log_nlp_usage) | 1 año | Purga anual |
+| Exportaciones | 24 horas | Purga automática |
+
+### 15.5. Monitorización y Observabilidad
+
+#### Logging Estructurado
+
+- **Formato:** JSON (`{ level, timestamp, message, requestId, userId, action, ... }`)
+- **Niveles:** `error`, `warn`, `info`, `debug`
+- **Campos comunes:** `requestId` (correlación), `userId` (cuando hay sesión), `action` (operación), `latency_ms`, `statusCode`
+- **Transporte:** Consola (Docker) + archivos rotativos (90 días de retención)
+- **Sensitive Data:** Los logs nunca incluyen contraseñas, tokens completos, API keys ni datos financieros completos (se truncan o hashean)
+
+#### Métricas
+
+| Métrica | Instrumento | Descripción |
+|---------|-------------|-------------|
+| `http_requests_total` | Prometheus | Conteo de peticiones por método y ruta |
+| `http_request_duration_ms` | Prometheus | Latencia percentil (p50, p95, p99) |
+| `db_query_duration_ms` | Prometheus | Latencia de queries a base de datos |
+| `gemini_api_calls_total` | Prometheus | Conteo de llamadas a Gemini API |
+| `gemini_api_errors_total` | Prometheus | Errores de Gemini API |
+| `gemini_api_cost_usd` | Prometheus | Costo acumulado de Gemini |
+| `payments_processed_total` | Prometheus | Conteo de pagos procesados |
+| `active_users` | Prometheus | Usuarios activos en la última hora |
+| `nlp_queries_per_user` | Prometheus | Consultas NLP por usuario (para rate limiting) |
+| `circuit_breaker_state` | Prometheus | Estado de circuit breakers (0=cerrado, 1=abierto) |
+
+#### Alertas
+
+| Alerta | Condición | Canal |
+|--------|-----------|-------|
+| Gemini API down | Circuit breaker abierto > 10 min | Email + in-app |
+| Alto costo de Gemini | Costo diario > 80% del presupuesto | Email |
+| Tasa de error alta | HTTP 5xx > 5% en 5 min | Email |
+| DB down | Readiness probe falla | Email |
+| Pagos duplicados | Idempotency conflict > 3 en 1 hora | Email + in-app |
+
+#### Dashboard de Monitoreo
+
+Un endpoint `GET /metrics` expone métricas en formato Prometheus para ser recolectadas por un servidor Prometheus (o servicio compatible como Grafana Cloud). El dashboard de Grafana incluye:
+
+- Panel de latencia de API (p50/p95/p99)
+- Panel de estado de servicios externos (Gemini, DB, Redis)
+- Panel de uso de NLP (costo diario, queries por usuario)
+- Panel de salud financiera (pagos procesados, comisiones generadas)
+- Panel de rate limiting (usuarios que alcanzan el límite)
+
+---
+
+## 16. Glosario
 
 | Término | Definición |
 |---------|------------|
@@ -1440,3 +1668,7 @@ Para una representación visual de la arquitectura, consultar:
 | **Liveness Probe** | Health check que verifica si el proceso está vivo (no verifica dependencias) |
 | **Readiness Probe** | Health check que verifica si el proceso está listo para recibir tráfico (verifica dependencias) |
 | **Swagger / OpenAPI** | Estándar para documentar APIs REST de forma interactiva y machine-readable |
+| **2FA / TOTP** | Autenticación de dos factores mediante contraseña temporal basada en tiempo |
+| **CSRF** | Cross-Site Request Forgery — ataque que fuerza a un usuario autenticado a ejecutar acciones no deseadas |
+| **Pirámide de Pruebas** | Modelo que clasifica las pruebas por granularidad y velocidad (unitarias → integración → E2E) |
+| **Seed Data** | Conjunto de datos precargados para pruebas y desarrollo |

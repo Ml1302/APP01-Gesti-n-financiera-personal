@@ -23,7 +23,7 @@ build/
 .DS_Store
 Thumbs.db
 
-# Docker
+# Docker (directorios, no el archivo de configuración)
 .docker/
 
 # Logs
@@ -32,6 +32,3 @@ npm-debug.log*
 
 # Tests
 coverage/
-
-# Docker
-.dockerignore

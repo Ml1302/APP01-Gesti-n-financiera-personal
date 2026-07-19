@@ -1,0 +1,45 @@
+@startuml
+!include <C4/C4_Container>
+!include <C4/C4_Context>
+
+LAYOUT_WITH_LEGEND()
+
+title Diagrama de Contexto — Micro-ERP Financiero
+
+Person(admin, "Administrador (Yo)", "Dueño del sistema, acceso completo")
+Person(promotor, "Promotor / Broker", "Gestor de cartera de préstamos")
+
+System_Boundary(erp, "Micro-ERP Financiero") {
+  Container(webapp, "Web App (PWA)", "React / Next.js", "Interfaz de usuario responsive con soporte offline")
+  Container(mobile, "App Móvil", "React Native / Flutter", "Aplicación nativa iOS y Android")
+  Container(api, "API Backend", "NestJS + Node.js", "API REST con autenticación JWT")
+  ContainerDb(db, "Base de Datos", "Oracle 21c XE", "Almacenamiento de datos financieros")
+  Container(cron, "Cron Jobs", "NestJS Scheduler", "Sincronización de tasas, limpieza de tokens")
+  Container(nlp_proxy, "NLP Proxy", "NestJS", "Proxy para llamadas a Gemini API")
+}
+
+System_Ext(gemini, "Google Gemini API", "NLP / IA")
+System_Ext(exchangerate, "ExchangeRate-API", "Tasas de cambio")
+System_Ext(vercel, "Vercel CDN", "Hosting frontend")
+System_Ext(oracle_cloud, "Oracle Cloud", "Infraestructura backend")
+System_Ext(email, "Servicio Email", "Notificaciones y recuperación")
+
+Rel(admin, webapp, "Usa", "HTTPS")
+Rel(admin, mobile, "Usa", "HTTPS")
+Rel(promotor, webapp, "Usa", "HTTPS")
+Rel(promotor, mobile, "Usa", "HTTPS")
+
+Rel(webapp, api, "API Calls", "HTTPS + JWT")
+Rel(mobile, api, "API Calls", "HTTPS + JWT")
+Rel(api, db, "Lectura/Escritura", "SQL")
+Rel(api, nlp_proxy, "Delegación NLP")
+Rel(nlp_proxy, gemini, "LLM Query", "HTTPS")
+Rel(api, cron, "Disparo programado")
+Rel(cron, exchangerate, "Consulta diaria", "HTTPS")
+Rel(api, email, "Envío de emails")
+
+Rel(webapp, vercel, "Hosting")
+Rel(api, oracle_cloud, "Hosting")
+Rel(db, oracle_cloud, "Hosting")
+
+@enduml
