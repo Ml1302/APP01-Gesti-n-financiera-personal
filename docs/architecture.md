@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.8 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.9 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo.
 
@@ -716,6 +716,143 @@ Usuario: "Presté 2000 soles a Juan al 5% mensual a 4 cuotas,
    │
    ▼
 [7] Transacción registrada + UI actualiza dashboard
+```
+
+#### 6.1.1. Ejemplos NLP por Tipo de Acción
+
+**Transferencia entre cuentas:**
+```
+Usuario: "Pasé 200 soles de mi BCP a mi cuenta de ahorros"
+Gemini:
+{
+  tipo: "transferencia",
+  monto: 200,
+  moneda: "PEN",
+  descripcion: "BCP → Ahorros",
+  cuenta_origen: "BCP",
+  cuenta_destino: "Ahorros",
+  fecha: "2026-07-19",
+  confianza: 0.95
+}
+→ POST /transfers
+```
+
+**Deuda propia (registro):**
+```
+Usuario: "Saqué un préstamo de 5000 soles en el BCP al 3% mensual a 12 cuotas"
+Gemini:
+{
+  tipo: "deuda",
+  monto: 5000,
+  moneda: "PEN",
+  acreedor: "BCP",
+  interes: 3.0,
+  frecuencia: "mensual",
+  cuotas: 12,
+  descripcion: "Préstamo BCP",
+  fecha: "2026-07-19",
+  confianza: 0.93
+}
+→ POST /debts
+```
+
+**Pago de deuda:**
+```
+Usuario: "Pagué la cuota de mi tarjeta Ripley de 350 soles"
+Gemini:
+{
+  tipo: "pago_deuda",
+  monto: 350,
+  moneda: "PEN",
+  descripcion: "Pago tarjeta Ripley",
+  acreedor: "Ripley",
+  fecha: "2026-07-19",
+  confianza: 0.88
+}
+→ Busca deuda por acreedor → POST /debts/{id}/payments
+```
+
+**Meta de ahorro:**
+```
+Usuario: "Quiero ahorrar 5000 soles para viajar a la playa en diciembre"
+Gemini:
+{
+  tipo: "meta_ahorro",
+  monto: 5000,
+  moneda: "PEN",
+  meta_nombre: "Viaje a la playa",
+  fecha_limite: "2026-12-01",
+  descripcion: "Ahorro para viaje",
+  confianza: 0.91
+}
+→ POST /savings-goals
+```
+
+**Aporte a meta:**
+```
+Usuario: "Ahorré 200 soles para mi viaje"
+Gemini:
+{
+  tipo: "meta_ahorro",
+  monto: 200,
+  moneda: "PEN",
+  meta_nombre: "viaje",
+  descripcion: "Ahorro para viaje",
+  fecha: "2026-07-19",
+  confianza: 0.87
+}
+→ Busca meta activa por nombre → POST /savings-goals/{id}/contribute
+```
+
+**Split de gasto:**
+```
+Usuario: "Pagué 120 soles de cena con Juan y María, dividimos en 3"
+Gemini:
+{
+  tipo: "split",
+  monto: 120,
+  moneda: "PEN",
+  descripcion: "Cena con Juan y María",
+  categoria_sugerida: "Comidas",
+  participantes: ["Juan", "María"],
+  fecha: "2026-07-19",
+  confianza: 0.94
+}
+→ POST /split-expenses (crea transacción de S/ 120 + deudas de S/ 40 c/u)
+```
+
+**Transacción recurrente:**
+```
+Usuario: "Todos los meses pago 80 soles de Netflix"
+Gemini:
+{
+  tipo: "recurrente",
+  monto: 80,
+  moneda: "PEN",
+  descripcion: "Netflix",
+  categoria_sugerida: "Suscripciones",
+  repeticion: "cada mes",
+  fecha: "2026-07-19",
+  confianza: 0.96
+}
+→ POST /recurring-transactions (próxima ejecución: 19/08/2026)
+```
+
+**Gasto simple con cuenta:**
+```
+Usuario: "Gasté 50 soles en almuerzo de mi efectivo"
+Gemini:
+{
+  tipo: "gasto",
+  monto: 50,
+  moneda: "PEN",
+  descripcion: "Almuerzo",
+  categoria_sugerida: "Alimentación",
+  cuenta_destino: "Efectivo",
+  fecha: "2026-07-19",
+  confianza: 0.97
+}
+→ POST /transactions (asocia cuenta "Efectivo" automáticamente)
 ```
 
 ### 6.2. Gestión de Préstamos
