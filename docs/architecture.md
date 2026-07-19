@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.11 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.12 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo.
 
@@ -180,7 +180,7 @@ Transacciones (ingresos/gastos)
   ├── recurrente_id (FK -> Transacciones_Recurrentes, nullable)
   ├── raw_nlp: TEXT (texto original del NLP)
   ├── contrapartida_id (FK -> Transacciones, para partida doble)
-  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── activa: BOOLEAN DEFAULT TRUE
   ├── deleted_at: TIMESTAMP NULL
   └── created_at
 
@@ -201,7 +201,7 @@ Préstamos
   ├── monto_original: NUMBER(12,2)
   ├── moneda: VARCHAR(3)
   ├── interes: DECIMAL(5,2) (tasa periódica base)
-  ├── frecuencia_pago: 'diario' | 'semanal' | 'quincenal' | 'mensual'
+  ├── frecuencia: 'diario' | 'semanal' | 'quincenal' | 'mensual'
   ├── cuotas_totales: INT
   ├── cuotas_restantes: INT
   ├── saldo_pendiente: NUMBER(12,2)
@@ -284,7 +284,7 @@ Comisiones (Promotor)
   ├── monto_comision: NUMBER(12,2)
   ├── moneda: VARCHAR(3)
   ├── pagada: BOOLEAN DEFAULT FALSE
-  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── activa: BOOLEAN DEFAULT TRUE
   ├── deleted_at: TIMESTAMP NULL
   └── created_at
 
@@ -386,7 +386,7 @@ Transferencias
   ├── fecha: DATE
   ├── origen_nlp: BOOLEAN
   ├── raw_nlp: TEXT
-  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── activa: BOOLEAN DEFAULT TRUE
   ├── deleted_at: TIMESTAMP NULL
   └── created_at
 
@@ -404,14 +404,14 @@ Deudas (lo que el usuario debe)
   ├── monto_original: NUMBER(12,2)
   ├── moneda: VARCHAR(3)
   ├── interes: DECIMAL(5,2) (tasa periódica)
-  ├── frecuencia_pago: 'mensual' | 'quincenal' | 'semanal'
+  ├── frecuencia: 'diario' | 'semanal' | 'quincenal' | 'mensual'
   ├── cuotas_totales: INT
   ├── cuotas_restantes: INT
   ├── saldo_pendiente: NUMBER(12,2)
   ├── fecha_inicio: DATE
   ├── proximo_vencimiento: DATE
   ├── estado: 'activo' | 'pagado' | 'atrasado'
-  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── activa: BOOLEAN DEFAULT TRUE
   ├── deleted_at: TIMESTAMP NULL
   └── created_at
 
@@ -1586,15 +1586,15 @@ Ningún registro financiero puede ser eliminado físicamente de la base de datos
 
 | Tabla | Campo Activo | Campo Eliminación |
 |-------|-------------|-------------------|
-| Transacciones | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Transacciones | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
 | Préstamos | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
 | Pagos | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
-| Comisiones | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Comisiones | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
 | Condiciones_Prestamo | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
 | Categorías | `activa: BOOLEAN` | *(no implementado — se reusan)* |
 | Cuentas | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
-| Transferencias | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
-| Deudas | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Transferencias | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Deudas | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
 
 #### Comportamiento de API con Soft Delete
 

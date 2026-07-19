@@ -42,7 +42,7 @@ entity Transacciones {
   recurrente_id : INT <<FK>>
   raw_nlp : TEXT
   contrapartida_id : INT <<FK>>
-  activo : BOOLEAN
+  activa : BOOLEAN
   deleted_at : TIMESTAMP
   * created_at : TIMESTAMP
 }
@@ -67,7 +67,7 @@ entity Prestamos {
   * monto_original : DECIMAL
   * moneda : VARCHAR
   * interes : DECIMAL
-  * frecuencia_pago : ENUM
+  * frecuencia : ENUM
   * cuotas_totales : INT
   * cuotas_restantes : INT
   * saldo_pendiente : DECIMAL
@@ -131,7 +131,7 @@ entity Comisiones {
   * monto_comision : DECIMAL
   * moneda : VARCHAR
   * pagada : BOOLEAN
-  * activo : BOOLEAN
+  * activa : BOOLEAN
   deleted_at : TIMESTAMP
   * created_at : TIMESTAMP
 }
@@ -240,10 +240,10 @@ entity Transferencias {
   * monto : DECIMAL
   * moneda : VARCHAR
   descripcion : VARCHAR
-  * fecha : DATE
+  *   fecha : DATE
   origen_nlp : BOOLEAN
   raw_nlp : TEXT
-  * activo : BOOLEAN
+  * activa : BOOLEAN
   deleted_at : TIMESTAMP
   * created_at : TIMESTAMP
 }
@@ -258,14 +258,14 @@ entity Deudas {
   * monto_original : DECIMAL
   * moneda : VARCHAR
   * interes : DECIMAL
-  * frecuencia_pago : ENUM
+  * frecuencia : ENUM
   * cuotas_totales : INT
   * cuotas_restantes : INT
   * saldo_pendiente : DECIMAL
   * fecha_inicio : DATE
   proximo_vencimiento : DATE
   * estado : ENUM
-  * activo : BOOLEAN
+  * activa : BOOLEAN
   deleted_at : TIMESTAMP
   * created_at : TIMESTAMP
 }
