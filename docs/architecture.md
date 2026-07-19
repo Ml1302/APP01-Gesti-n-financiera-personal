@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.2 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.3 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo. El diseño prioriza una infraestructura de costo cero, alta disponibilidad mediante contenedores y procesamiento de lenguaje natural (NLP) integrado.
 
@@ -137,6 +137,8 @@ Transacciones (ingresos/gastos)
   ├── origen_nlp: BOOLEAN (si fue creada por NLP)
   ├── raw_nlp: TEXT (texto original del NLP)
   ├── contrapartida_id (FK -> Transacciones, para partida doble)
+  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── deleted_at: TIMESTAMP NULL
   └── created_at
 
 Presupuestos
@@ -164,6 +166,9 @@ Préstamos
   ├── fecha_proximo_pago: DATE
   ├── estado: 'activo' | 'pagado' | 'castigado'
   ├── penalidad_diaria: DECIMAL(5,2) (% de mora por día)
+  ├── version: INT DEFAULT 1 (optimistic lock)
+  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── deleted_at: TIMESTAMP NULL
   └── created_at
 
 Condiciones_Prestamo
@@ -180,6 +185,7 @@ Condiciones_Prestamo
   ├── prioridad: INT DEFAULT 0 (mayor prioridad se evalúa primero)
   ├── activa: BOOLEAN DEFAULT TRUE
   ├── descripcion: TEXT (texto legible de la condición)
+  ├── deleted_at: TIMESTAMP NULL
   └── created_at
 
   Ejemplos de condiciones almacenadas:
@@ -207,6 +213,9 @@ Pagos (Préstamos)
   ├── id (PK)
   ├── prestamo_id (FK -> Préstamos)
   ├── condicion_aplicada_id (FK -> Condiciones_Prestamo, nullable)
+  ├── pago_reversa_id (FK -> Pagos, nullable — pago original que se revierte)
+  ├── motivo_reversa: TEXT (nullable, solo si es reversión)
+  ├── idempotency_key: VARCHAR(64) (UNIQUE, nullable — evita pagos duplicados)
   ├── monto: NUMBER(12,2)
   ├── monto_interes: NUMBER(12,2)
   ├── monto_capital: NUMBER(12,2)
@@ -214,7 +223,13 @@ Pagos (Préstamos)
   ├── moneda: VARCHAR(3)
   ├── fecha_pago: DATE
   ├── nro_cuota: INT
+  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── deleted_at: TIMESTAMP NULL
   └── created_at
+
+  Nota: Los pagos son inmutables. Para corregir errores se crea un
+  pago de reversión (monto negativo) vinculado al original mediante
+  pago_reversa_id. Nunca se edita ni elimina un pago existente.
 
 Comisiones (Promotor)
   ├── id (PK)
@@ -225,6 +240,8 @@ Comisiones (Promotor)
   ├── monto_comision: NUMBER(12,2)
   ├── moneda: VARCHAR(3)
   ├── pagada: BOOLEAN DEFAULT FALSE
+  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── deleted_at: TIMESTAMP NULL
   └── created_at
 
 Tasas_Cambio
@@ -234,6 +251,20 @@ Tasas_Cambio
   ├── tasa: NUMBER(12,6)
   ├── fuente: VARCHAR
   └── fecha: DATE (UNIQUE por par + fecha)
+
+Idempotencia_Keys
+  ├── id (PK)
+  ├── key: VARCHAR(64) (UNIQUE — UUID v4 generado por el cliente)
+  ├── recurso: VARCHAR (ej. "pago_prestamo", "crear_transaccion")
+  ├── recurso_id: INT (ID del recurso creado, nullable si falló)
+  ├── resultado: 'completado' | 'en_proceso' | 'fallido'
+  ├── respuesta_hash: VARCHAR(64) (SHA-256 del body de respuesta, para idempotencia exacta)
+  ├── expired_at: TIMESTAMP (TTL: 24h tras la última consulta)
+  └── created_at
+
+  Nota: Las claves de idempotencia expiran automáticamente tras 24 horas
+  sin actividad. El cliente genera un UUID v4 único por operación y lo
+  envía en el header `Idempotency-Key`.
 
 Configuraciones
   ├── id (PK)
@@ -689,7 +720,9 @@ El frontend muestra las condiciones extraídas en la vista previa para que el us
 ### Conflicto de Datos
 
 - Cada entidad tiene un campo `updated_at` y un `version` (entero incremental).
-- Al sincronizar, si `version` del cliente es menor que la del servidor, se resuelve con "last-write-wins" (la operación más reciente gana) y se notifica al usuario si sus datos fueron sobrescritos.
+- Al sincronizar, si `version` del cliente es menor que la del servidor, el servidor rechaza la operación con `409 Conflict`. El cliente debe re-leer el estado actual y resolver el conflicto antes de reintentar.
+- **Excepción — Pagos:** Los pagos son inmutables y usan `idempotency_key`. Si el servidor ya procesó un pago con esa clave, devuelve el resultado original sin importar el estado offline del cliente. Esto garantiza que no haya pagos duplicados incluso en conflictos offline.
+- **Notificación:** El usuario recibe una alerta visual cuando una operación offline es rechazada por conflicto, con la opción de revisar y corregir los datos.
 
 ---
 
@@ -702,7 +735,202 @@ El frontend muestra las condiciones extraídas en la vista previa para que el us
 
 ---
 
-## 10. Diagramas (Referencia)
+## 10. Integridad Financiera
+
+### 10.1. Idempotencia
+
+Toda operación de escritura que tenga impacto financiero (registrar pago, crear transacción) debe ser **idempotente**: ejecutarla N veces produce el mismo resultado que ejecutarla una sola vez.
+
+#### Flujo de Idempotencia
+
+```
+Cliente                              Backend
+  │                                    │
+  │ POST /loans/:id/payments           │
+  │ Idempotency-Key: uuid-v4           │
+  │───────────────────────────────────→│
+  │                                    ├─ ¿Key existe?
+  │                                    │  ├─ Sí y resultado='completado'
+  │                                    │  │  → Devolver respuesta original (200)
+  │                                    │  ├─ Sí y resultado='en_proceso'
+  │                                    │  │  → 409 Conflict (solicitud en curso)
+  │                                    │  └─ No → Procesar normalmente
+  │                                    │
+  │                                    ├─ BEGIN TRANSACTION
+  │                                    │  INSERT Idempotencia_Keys (key, 'en_proceso')
+  │                                    │  Procesar pago...
+  │                                    │  UPDATE Idempotencia_Keys SET 'completado'
+  │                                    │  COMMIT
+  │                                    │
+  │ 201 { pago_id, monto, ... }        │
+  │←───────────────────────────────────│
+```
+
+**Reglas:**
+- El cliente genera un **UUID v4** único por operación y lo envía en el header `Idempotency-Key`.
+- Si el cliente no envía `Idempotency-Key`, el backend **rechaza** la operación con `400 Bad Request`.
+- Las claves expiran a las 24 horas (limpieza automática vía cron).
+- En caso de timeout, el cliente **debe** reintentar con la misma clave.
+- El endpoint `POST /loans/:id/payments` y `POST /transactions` son obligatoriamente idempotentes.
+
+### 10.2. Control de Concurrencia
+
+Los préstamos son recursos compartidos: dos usuarios (admin y promotor) podrían intentar registrar pagos simultáneamente sobre el mismo préstamo. Sin control de concurrencia, ambos leerían el mismo `saldo_pendiente` y uno sobrescribiría al otro.
+
+#### Estrategia: Bloqueo Optimista
+
+Cada préstamo tiene un campo `version` que se incrementa en cada modificación:
+
+```
+1. Leer préstamo (versión = 3)
+2. Calcular nuevo saldo
+3. UPDATE prestamos
+   SET saldo_pendiente = nuevo_saldo,
+       version = version + 1
+   WHERE id = ? AND version = 3
+4. Si filas_afectadas = 0 → otra operación modificó el préstamo
+   → Rechazar con 409 Conflict
+   → El cliente debe reintentar (re-leer y recalcular)
+```
+
+#### Estrategia: Bloqueo Pesimista (para operaciones críticas)
+
+Para reducir reintentos en operaciones de alto volumen, se puede usar `SELECT ... FOR UPDATE` dentro de una transacción:
+
+```
+BEGIN TRANSACTION
+  SELECT saldo_pendiente, version
+  FROM prestamos
+  WHERE id = ?
+  FOR UPDATE  ← Bloquea otras lecturas/escrituras hasta COMMIT
+
+  Calcular y procesar pago...
+
+  UPDATE prestamos SET saldo_pendiente = nuevo_valor WHERE id = ?
+COMMIT  ← Libera el lock
+```
+
+> **Nota:** Usar bloqueo pesimista solo cuando sea necesario; el optimista es suficiente para la mayoría de los casos y evita deadlocks.
+
+#### Protección Adicional: Auditoría de Cambios Concurrentes
+
+La tabla `log_concurrencia` registra intentos de escritura conflictivos:
+
+```
+log_concurrencia
+  ├── id (PK)
+  ├── entidad: VARCHAR (ej. "prestamos")
+  ├── entidad_id: INT
+  ├── usuario_id (FK -> Usuarios)
+  ├── version_intentada: INT
+  ├── version_actual: INT
+  ├── payload: JSON (datos que se intentaron escribir)
+  └── created_at
+```
+
+### 10.3. Precisión y Redondeo
+
+Para evitar descuadres contables por acumulación de errores de redondeo, se siguen estas reglas:
+
+| Regla | Valor |
+|-------|-------|
+| **Modo de redondeo** | `ROUND_HALF_UP` (redondear hacia arriba en .5) |
+| **Precisión de cálculo** | DECIMAL(16,6) para operaciones intermedias |
+| **Precisión de almacenamiento** | DECIMAL(12,2) (2 decimales para la moneda) |
+| **Precisión de tasas** | DECIMAL(7,4) para tasas de interés (4 decimales) |
+| **Precisión de tipo de cambio** | DECIMAL(12,6) para tasas de cambio (6 decimales) |
+
+#### Flujo de Redondeo
+
+```
+1. Cálculo intermedio: DECIMAL(16,6) — sin redondeo
+2. Aplicar ROUND_HALF_UP al resultado final
+3. Almacenar: DECIMAL(12,2)
+
+Ejemplo:
+  Monto: S/ 100.00
+  Interés mensual: 5.25%
+  Interés calculado: 100.00 × 0.0525 = 5.250000
+  Redondeado: 5.25 ✅
+
+  Cuota sistema francés:
+  (1000 × 0.05 × 1.05^4) / (1.05^4 - 1)
+  = (1000 × 0.05 × 1.215506) / (1.215506 - 1)
+  = 60.775300 / 0.215506
+  = 282.011882...
+  Redondeado: 282.01 ✅
+```
+
+#### Contabilidad de Centavos Perdidos
+
+En operaciones que generan residuales (ej. división de montos en N cuotas), el sistema debe manejar el **centavo perdido o ganado** explícitamente:
+
+```
+Ejemplo: S/ 100.00 dividido en 3 cuotas
+  Cuota ideal: 33.333333...
+  Cuota aplicada: 33.33 (redondeo)
+  Suma: 33.33 × 3 = 99.99
+  Diferencia: S/ 0.01 (centavo perdido)
+
+  Solución: Ajustar la última cuota
+  Cuota 1: 33.33
+  Cuota 2: 33.33
+  Cuota 3: 33.34  ← se absorbe la diferencia
+```
+
+La tabla `log_ajustes_redondeo` registra estos ajustes para auditoría.
+
+### 10.4. Eliminación Segura (Soft Deletes)
+
+Ningún registro financiero puede ser eliminado físicamente de la base de datos. Todas las tablas con impacto financiero implementan **soft delete**:
+
+| Tabla | Campo Activo | Campo Eliminación |
+|-------|-------------|-------------------|
+| Transacciones | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Préstamos | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Pagos | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Comisiones | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Condiciones_Prestamo | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Categorías | `activa: BOOLEAN` | *(no implementado — se reusan)* |
+
+#### Comportamiento de API con Soft Delete
+
+```
+GET /loans          → Solo WHERE activo = TRUE
+GET /loans?deleted  → Admin: incluye eliminados (para recuperación)
+DELETE /loans/:id   → SET deleted_at = NOW(), activo = FALSE
+                       (no DELETE FROM)
+PUT /loans/:id/restore → SET deleted_at = NULL, activo = TRUE
+                            (solo admin, dentro de 30 días)
+```
+
+**Reglas:**
+- Todas las queries de listado filtran por `activo = TRUE` por defecto.
+- El admin puede ver registros eliminados con `?deleted=true`.
+- Los registros eliminados se conservan por **30 días** antes de purga física (cron mensual).
+- Las relaciones FK no deben usar `ON DELETE CASCADE` en tablas financieras; usar `ON DELETE RESTRICT` y manejar la desactivación lógica en la aplicación.
+
+### 10.5. Inmutabilidad del Historial de Pagos
+
+Una vez registrado, un pago no puede ser modificado ni eliminado. Para corregir errores:
+
+1. **Registrar un pago incorrecto** → No se edita. Se crea un **pago de reversión** (monto negativo, referenciando el pago original mediante `pago_reversa_id`).
+2. **Registrar el pago correcto** → Nuevo pago con los valores correctos.
+3. **Auditoría** → Ambos quedan registrados con su `idempotency_key`, `created_at` y vinculados entre sí.
+
+```
+Pagos
+  ├── ...
+  ├── pago_reversa_id (FK -> Pagos, nullable — apunta al pago que está revirtiendo)
+  ├── motivo_reversa: TEXT (nullable, ej. "Monto incorrecto, se registró S/ 500 en vez de S/ 300")
+  └── ...
+```
+
+Esto garantiza que el historial financiero sea **inmutable y auditable** en todo momento.
+
+---
+
+## 11. Diagramas (Referencia)
 
 Para una representación visual de la arquitectura, consultar:
 
@@ -713,7 +941,7 @@ Para una representación visual de la arquitectura, consultar:
 
 ---
 
-## 11. Glosario
+## 12. Glosario
 
 | Término | Definición |
 |---------|------------|
