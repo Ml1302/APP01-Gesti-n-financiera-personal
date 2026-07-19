@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.4 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.5 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo. El diseño prioriza una infraestructura de costo cero, alta disponibilidad mediante contenedores y procesamiento de lenguaje natural (NLP) integrado.
 
@@ -345,6 +345,9 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 
 ## 4. API Endpoints (Vista General)
 
+> **Nota:** Todas las rutas llevan el prefijo `/api/v1/` (ej. `/api/v1/loans`). Los endpoints listados aquí son conceptuales; la versión específica se define en la URL.
+> Los endpoints `GET` que retornan listas soportan paginación (`?page=`, `?limit=`), ordenamiento (`?sort=`, `?order=`) y filtros específicos del recurso (ver §11.7).
+
 | Método | Ruta | Acceso | Descripción |
 |--------|------|--------|-------------|
 | `POST` | `/auth/login` | Público | Iniciar sesión |
@@ -381,6 +384,10 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 | `PUT` | `/settings` | Admin | Actualizar configuración |
 | `POST` | `/auth/forgot-password` | Público | Solicitar restablecimiento de contraseña |
 | `POST` | `/auth/reset-password` | Público | Restablecer contraseña con token |
+| `GET` | `/health` | Público | Liveness probe (estado del proceso) |
+| `GET` | `/ready` | Público | Readiness probe (dependencias operativas) |
+| `GET` | `/api/docs` | Público | Swagger UI (documentación interactiva) |
+| `GET` | `/api/docs-json` | Público | OpenAPI schema descargable |
 | `GET` | `/notifications` | Ambos | Listar notificaciones del usuario |
 | `PUT` | `/notifications/:id/read` | Ambos | Marcar notificación como leída |
 | `GET` | `/notifications/settings` | Ambos | Obtener configuración de notificaciones |
@@ -1216,6 +1223,186 @@ Body: { token: "<token>", new_password: "NuevaC0ntr4s3ñ@" }
 - El rate limiting de `POST /auth/forgot-password` es de 3 intentos por hora por IP.
 - No revelar si el email existe o no en la respuesta.
 
+### 11.7. Paginación y Filtros
+
+Toda lista de recursos (`GET /loans`, `GET /transactions`, `GET /payments`, `GET /notifications`, etc.) implementa paginación y filtros.
+
+#### Paginación
+
+| Parámetro | Valor por defecto | Límite | Descripción |
+|-----------|------------------|--------|-------------|
+| `?page=` | 1 | — | Número de página (1-indexed) |
+| `?limit=` | 20 | 100 | Elementos por página |
+| `?sort=` | `created_at` | — | Campo por el que ordenar |
+| `?order=` | `desc` | — | `asc` o `desc` |
+
+#### Formato de Respuesta
+
+```json
+GET /v1/transactions?page=1&limit=20&sort=fecha&order=desc
+
+{
+  "data": [ ... ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total_items": 157,
+    "total_pages": 8,
+    "has_next": true,
+    "has_prev": false
+  }
+}
+```
+
+#### Filtros por Recurso
+
+| Recurso | Parámetros de filtro |
+|---------|----------------------|
+| `GET /v1/transactions` | `?tipo=ingreso&categoria_id=5&moneda=PEN&fecha_desde=2026-01-01&fecha_hasta=2026-07-19&monto_min=100&monto_max=5000&q=búsqueda_texto&origen_nlp=true` |
+| `GET /v1/loans` | `?estado=activo&deudor=Juan&moneda=PEN&promotor_id=3&fecha_desde=&fecha_hasta=&monto_min=&monto_max=` |
+| `GET /v1/loans/:id/payments` | `?nro_cuota=1&fecha_desde=&fecha_hasta=&condicion_aplicada_id=` |
+| `GET /v1/notifications` | `?tipo=pago_recibido&leida=false&fecha_desde=` |
+
+#### Búsqueda de Texto
+
+El parámetro `?q=` realiza búsqueda de texto parcial en campos descriptivos:
+
+- **Transacciones**: `descripcion`, `raw_nlp`
+- **Préstamos**: `deudor`
+- **Categorías**: `nombre`
+
+La búsqueda usa `LIKE %texto%` (insensible a mayúsculas, con índices de texto completo).
+
+### 11.8. Health Check
+
+Dos endpoints para orquestación de contenedores y monitoreo:
+
+| Método | Ruta | Uso | Descripción |
+|--------|------|-----|-------------|
+| `GET` | `/health` | Liveness probe | Responde `200 OK` con `{ status: "ok" }` si el proceso está vivo |
+| `GET` | `/ready` | Readiness probe | Responde `200 OK` con `{ status: "ok", db: "connected", gemini: "reachable", redis: "connected" }` si todas las dependencias están operativas |
+
+#### Comportamiento
+
+```
+GET /health  → 200 { status: "ok", uptime: 3600, version: "1.0.0" }
+
+GET /ready   → 200 {
+  status: "ok",
+  checks: {
+    database: { status: "connected", latency_ms: 5 },
+    gemini_api: { status: "reachable", latency_ms: 120 },
+    redis: { status: "connected", latency_ms: 2 }
+  },
+  uptime: 3600,
+  version: "1.0.0"
+}
+
+GET /ready (si DB falla) → 503 {
+  status: "degraded",
+  checks: {
+    database: { status: "disconnected", error: "Connection refused" },
+    gemini_api: { status: "reachable", latency_ms: 130 },
+    redis: { status: "connected", latency_ms: 2 }
+  }
+}
+```
+
+- `/health` no verifica dependencias (solo que el proceso no haya muerto).
+- `/ready` verifica DB, Redis y Gemini. Si alguna falla, responde `503`.
+- Ambos endpoints son públicos (no requieren autenticación).
+- Docker Compose usa `/health` para `interval: 30s` y `/ready` para `start_period: 60s`.
+
+### 11.9. Versionado de API
+
+La API usa versionado explícito en la URL:
+
+```
+Formato: /api/v{major}/{recurso}
+
+/v1/loans
+/v1/transactions
+/v2/loans  (cuando exista)
+```
+
+#### Política de Versionado
+
+| Aspecto | Decisión |
+|---------|----------|
+| **Ubicación** | Prefijo en la URL: `/api/v1/` |
+| **Estrategia** | Major version solamente (cambios breaking → nueva versión) |
+| **Soporte de versiones antiguas** | Mínimo 6 meses desde el anuncio de deprecación |
+| **Compatibilidad hacia atrás** | No se eliminan campos de respuesta existentes; solo se agregan nuevos |
+| **Headers** | Opcional: `Accept-Version: 1.x` como alternativa al prefijo URL |
+| **Deprecación** | Header `Sunset: Sat, 19 Jan 2027 00:00:00 GMT` en respuestas de versiones deprecadas |
+| **Documentación** | Cada versión tiene su propia sección en Swagger |
+
+#### Ejemplo de Deprecación
+
+```
+GET /api/v1/loans
+Response Header:
+  Sunset: Sat, 19 Jan 2027 00:00:00 GMT
+  Deprecated: true
+
+Body: {
+  "data": [...],
+  "warning": "API v1 será deprecada el 19-01-2027. Migrar a /api/v2/"
+}
+```
+
+### 11.10. Documentación de API (Swagger / OpenAPI)
+
+La API se documenta con OpenAPI 3.1 y se expone via Swagger UI.
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Formato** | OpenAPI 3.1 (JSON/YAML) |
+| **Framework** | `@nestjs/swagger` (decoradores en los DTOs y controladores) |
+| **UI** | Swagger UI en `/api/docs` (montado automáticamente por NestJS) |
+| **Autenticación** | Botón "Authorize" en Swagger UI para ingresar JWT |
+| **Export** | Descargable como `openapi.json` desde `/api/docs-json` |
+
+#### Contenido de la Documentación
+
+Cada endpoint documenta:
+
+- **Parámetros** de ruta, query y body con tipos y validación.
+- **Códigos de respuesta** (200, 201, 400, 401, 403, 404, 409, 429, 500).
+- **Modelos** de request y response (DTOs) con ejemplos.
+- **Headers** requeridos (`Authorization`, `Idempotency-Key`, `Accept-Version`).
+- **Rate limiting** aplicable al endpoint.
+
+Ejemplo de entrada en OpenAPI:
+
+```yaml
+/v1/loans:
+  get:
+    summary: Listar préstamos
+    parameters:
+      - name: page
+        in: query
+        schema: { type: integer, default: 1 }
+      - name: limit
+        in: query
+        schema: { type: integer, default: 20, maximum: 100 }
+      - name: estado
+        in: query
+        schema: { type: string, enum: [activo, pagado, castigado] }
+    responses:
+      '200':
+        description: Lista paginada de préstamos
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data: { type: array, items: { $ref: '#/components/schemas/Prestamo' } }
+                pagination: { $ref: '#/components/schemas/Pagination' }
+      '401':
+        description: No autenticado
+```
+
 ---
 
 ## 12. Diagramas (Referencia)
@@ -1245,3 +1432,11 @@ Para una representación visual de la arquitectura, consultar:
 | **Efecto** | Consecuencia de una condición activada (ej. "50% menos de interés") |
 | **Pago Anticipado** | Pago realizado antes de la fecha de vencimiento de una cuota |
 | **Pago Total Adelantado** | Liquidación completa del saldo restante antes del plazo original |
+| **Idempotencia** | Propiedad que garantiza que una operación ejecutada N veces produce el mismo resultado que una sola ejecución |
+| **Circuit Breaker** | Patrón de resiliencia que detiene llamadas a un servicio cuando la tasa de error supera un umbral |
+| **Soft Delete** | Eliminación lógica que marca un registro como inactivo sin borrarlo físicamente |
+| **Optimistic Lock** | Control de concurrencia que asume conflictos raros y los detecta al escribir mediante un contador de versión |
+| **Pessimistic Lock** | Control de concurrencia que bloquea el recurso durante toda la transacción para evitar conflictos |
+| **Liveness Probe** | Health check que verifica si el proceso está vivo (no verifica dependencias) |
+| **Readiness Probe** | Health check que verifica si el proceso está listo para recibir tráfico (verifica dependencias) |
+| **Swagger / OpenAPI** | Estándar para documentar APIs REST de forma interactiva y machine-readable |
