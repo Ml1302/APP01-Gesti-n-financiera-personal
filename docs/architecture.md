@@ -1,8 +1,10 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.6 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.7 · **Última actualización:** 2026-07-19
 
-Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo. El diseño prioriza una infraestructura de costo cero, alta disponibilidad mediante contenedores y procesamiento de lenguaje natural (NLP) integrado.
+Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo.
+
+**Filosofía de diseño:** Todo en el sistema debe ser rápido, simple y要求 mínimo esfuerzo del usuario. La interfaz principal es el lenguaje natural (NLP): el usuario escribe lo que quiere hacer y el sistema lo interpreta y ejecuta. Si una operación requiere más de 3 taps o una frase, está mal diseñada. La complejidad (partida doble, condiciones, conversiones) siempre se maneja oculta en el backend. El backend prioriza una infraestructura de costo cero y alta disponibilidad mediante contenedores.
 
 ---
 
@@ -155,6 +157,7 @@ Categorías
 Transacciones (ingresos/gastos)
   ├── id (PK)
   ├── usuario_id (FK -> Usuarios)
+  ├── cuenta_id (FK -> Cuentas)
   ├── categoria_id (FK -> Categorías)
   ├── tipo: 'ingreso' | 'gasto'
   ├── monto: NUMBER(12,2)
@@ -162,6 +165,7 @@ Transacciones (ingresos/gastos)
   ├── descripcion: TEXT
   ├── fecha: DATE
   ├── origen_nlp: BOOLEAN (si fue creada por NLP)
+  ├── recurrente_id (FK -> Transacciones_Recurrentes, nullable)
   ├── raw_nlp: TEXT (texto original del NLP)
   ├── contrapartida_id (FK -> Transacciones, para partida doble)
   ├── activo: BOOLEAN DEFAULT TRUE
@@ -340,6 +344,117 @@ Configuraciones
   ├── tasa_comision_promotor: DECIMAL(5,2)
   ├── notificaciones: BOOLEAN
   └── updated_at
+
+Cuentas
+  ├── id (PK)
+  ├── usuario_id (FK -> Usuarios)
+  ├── nombre: VARCHAR (ej. "Efectivo", "BCP Ahorros", "Interbank")
+  ├── tipo: 'efectivo' | 'banco' | 'ahorros' | 'tarjeta_credito' | 'billetera_digital'
+  ├── moneda: VARCHAR(3) DEFAULT 'PEN'
+  ├── saldo_inicial: DECIMAL(12,2) DEFAULT 0
+  ├── saldo_actual: DECIMAL(12,2) DEFAULT 0 (calculado automáticamente desde movimientos)
+  ├── icono: VARCHAR (emoji o identificador visual)
+  ├── activa: BOOLEAN DEFAULT TRUE
+  ├── deleted_at: TIMESTAMP NULL
+  └── created_at
+
+  Nota: El saldo_actual se recalcula automáticamente sumando ingresos y
+  restando gastos/transferencias de todas las transacciones asociadas.
+  El usuario nunca edita el saldo manualmente.
+
+Transferencias
+  ├── id (PK)
+  ├── usuario_id (FK -> Usuarios)
+  ├── cuenta_origen_id (FK -> Cuentas)
+  ├── cuenta_destino_id (FK -> Cuentas)
+  ├── monto: NUMBER(12,2)
+  ├── moneda: VARCHAR(3)
+  ├── descripcion: VARCHAR
+  ├── fecha: DATE
+  ├── origen_nlp: BOOLEAN
+  ├── raw_nlp: TEXT
+  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── deleted_at: TIMESTAMP NULL
+  └── created_at
+
+  Nota: Una transferencia es siempre entre cuentas del mismo usuario.
+  Para el usuario es un solo paso ("pasé S/ 200 de BCP a efectivo").
+  El backend registra automáticamente el ingreso y el gasto en las
+  cuentas correspondientes.
+
+Deudas (lo que el usuario debe)
+  ├── id (PK)
+  ├── usuario_id (FK -> Usuarios)
+  ├── cuenta_id (FK -> Cuentas, nullable — desde dónde se paga)
+  ├── acreedor: VARCHAR (ej. "Banco BCP", "Tarjeta Ripley")
+  ├── tipo: 'prestamo_bancario' | 'tarjeta_credito' | 'prestamo_personal' | 'hipoteca' | 'otro'
+  ├── monto_original: NUMBER(12,2)
+  ├── moneda: VARCHAR(3)
+  ├── interes: DECIMAL(5,2) (tasa periódica)
+  ├── frecuencia_pago: 'mensual' | 'quincenal' | 'semanal'
+  ├── cuotas_totales: INT
+  ├── cuotas_restantes: INT
+  ├── saldo_pendiente: NUMBER(12,2)
+  ├── fecha_inicio: DATE
+  ├── proximo_vencimiento: DATE
+  ├── estado: 'activo' | 'pagado' | 'atrasado'
+  ├── activo: BOOLEAN DEFAULT TRUE
+  ├── deleted_at: TIMESTAMP NULL
+  └── created_at
+
+  Nota: Las deudas propias usan la misma lógica de pago que los
+  préstamos (amortización, condiciones), pero desde la perspectiva
+  opuesta: el usuario es quien paga, no quien cobra.
+
+Transacciones_Recurrentes
+  ├── id (PK)
+  ├── usuario_id (FK -> Usuarios)
+  ├── cuenta_id (FK -> Cuentas)
+  ├── categoria_id (FK -> Categorías, nullable)
+  ├── tipo: 'ingreso' | 'gasto' | 'transferencia'
+  ├── monto: NUMBER(12,2)
+  ├── moneda: VARCHAR(3)
+  ├── descripcion: VARCHAR
+  ├── frecuencia: 'diario' | 'semanal' | 'quincenal' | 'mensual' | 'anual'
+  ├── dia_ejecucion: INT (1-31 para mensual, 1-7 para semanal, etc.)
+  ├── proxima_ejecucion: DATE
+  ├── ultima_ejecucion: DATE
+  ├── activa: BOOLEAN DEFAULT TRUE
+  └── created_at
+
+  Nota: Un cron diario ejecuta las recurrencias cuyo próxima_ejecucion
+  <= TODAY. Al ejecutarse, crea la transacción real y calcula la
+  próxima fecha. El usuario puede ver qué transacciones son recurrentes
+  y cuáles fueron generadas automáticamente (campo recurrente_id).
+
+Metas_Ahorro
+  ├── id (PK)
+  ├── usuario_id (FK -> Usuarios)
+  ├── cuenta_id (FK -> Cuentas, nullable — cuenta destino)
+  ├── nombre: VARCHAR (ej. "Viaje a la playa", "Fondo de emergencia")
+  ├── monto_objetivo: NUMBER(12,2)
+  ├── moneda: VARCHAR(3) DEFAULT 'PEN'
+  ├── monto_actual: NUMBER(12,2) DEFAULT 0
+  ├── fecha_limite: DATE (nullable)
+  ├── progreso: DECIMAL(5,2) GENERATED (monto_actual / monto_objetivo * 100)
+  ├── activa: BOOLEAN DEFAULT TRUE
+  ├── completada: BOOLEAN DEFAULT FALSE
+  └── created_at
+
+  Nota: Las metas se crean con NLP ("quiero ahorrar 500 soles para
+  navidad") o manualmente. Al registrar un ingreso, el sistema puede
+  sugerir destinarlo a una meta activa. El progreso se actualiza
+  automáticamente desde transacciones etiquetadas con la meta.
+
+Actividad (Historial de cambios)
+  ├── id (PK)
+  ├── usuario_id (FK -> Usuarios)
+  ├── tipo: 'creacion' | 'actualizacion' | 'eliminacion' | 'reversion' | 'pago'
+  ├── entidad: VARCHAR (ej. "prestamo", "transaccion", "deuda")
+  ├── entidad_id: INT
+  ├── detalle: JSON (cambios específicos: { campo: "monto", viejo: 500, nuevo: 300 })
+  ├── origen: 'manual' | 'nlp' | 'recurrente' | 'sistema'
+  ├── created_at: TIMESTAMP
 ```
 
 ### Modelo Contable (Partida Doble Oculta)
@@ -744,6 +859,258 @@ El frontend muestra las condiciones extraídas en la vista previa para que el us
    - Muestra los saldos individuales de cada cuenta en su moneda original (ej. "Ahorros: $500", "Efectivo: S/ 200").
    - Consolida el flujo de caja global convirtiendo todo a la moneda base del usuario usando la tasa histórica más cercana a la fecha de la transacción.
    - Cálculo del patrimonio neto en moneda base con conversión en tiempo real.
+
+### 6.6. Cuentas y Carteras (Wallets)
+
+El eje central del sistema financiero. Cada usuario puede tener múltiples cuentas que representan dónde está su dinero.
+
+#### Interacción del Usuario
+
+```
+NLP: "Pasé 200 soles de mi BCP a mi cuenta de ahorros"
+  → Crea transferencia entre cuentas automáticamente
+
+NLP: "Cuánto tengo en el banco?"
+  → Muestra saldo actual de todas las cuentas bancarias
+
+UI: Un solo tap para ver el saldo de cada cuenta en el dashboard
+```
+
+#### Reglas de Negocio
+
+- Cada transacción **debe** estar asociada a una cuenta (por defecto, la cuenta "Efectivo" del usuario).
+- El `saldo_actual` de cada cuenta se calcula automáticamente desde los movimientos. El usuario **nunca** edita saldos manualmente.
+- Al crear la primera cuenta (onboarding), se pregunta: "¿Cuánto tienes en efectivo?" y se crea con ese saldo inicial.
+- Las transferencias entre cuentas del mismo usuario se registran como un solo paso (el backend crea el gasto y el ingreso).
+- Las cuentas se muestran con íconos y colores para identificación visual rápida.
+
+#### Visualización en Dashboard
+
+```
+┌──────────────────────────────────────────────┐
+│  Mis Cuentas                     Añadir +    │
+│                                              │
+│  💵 Efectivo                   S/ 1,250.00   │
+│  🏦 BCP Ahorros                S/ 5,300.00   │
+│  💳 Interbank                  S/ 2,100.00    │
+│  📱 Yape                       S/    85.00    │
+│  ────────────────────────────────────────    │
+│  Total:                       S/ 8,735.00    │
+└──────────────────────────────────────────────┘
+
+Tap en una cuenta → Ver movimientos de esa cuenta
+```
+
+### 6.7. Deudas Propias
+
+Gestión de lo que el usuario debe (tarjetas de crédito, préstamos bancarios, hipotecas). Es el espejo de los préstamos que el usuario otorga.
+
+#### Interacción del Usuario
+
+```
+NLP: "Pagué la cuota de mi tarjeta Ripley de 350 soles"
+  → Registra pago contra la deuda, actualiza saldo pendiente
+
+NLP: "Cuánto debo en total?"
+  → Muestra resumen de todas las deudas activas
+```
+
+#### Reglas de Negocio
+
+- Usa la misma lógica de amortización que los préstamos (sistema francés).
+- Las condiciones aplican igual: "si pago antes de fecha, me descuentan intereses".
+- Al registrar un pago, se descuenta de la cuenta asociada (o se pregunta cuál usar).
+- El dashboard muestra:
+  - **Deudas activas:** Tarjeta Ripley: S/ 2,500, BCP Préstamo: S/ 15,000
+  - **Próximo vencimiento:** Tarjeta Ripley — 5 agosto (en 7 días)
+  - **Total adeudado:** S/ 17,500
+
+### 6.8. Transacciones Recurrentes
+
+Gastos e ingresos que se repiten automáticamente.
+
+#### Interacción del Usuario
+
+```
+NLP: "Todos los meses pago 80 soles de Netflix"
+  → Crea recurrencia mensual, día del mes actual
+
+NLP: "Cada lunes deposito 50 soles en mi meta de ahorro"
+  → Crea recurrencia semanal asociada a una meta
+
+UI: "Esta transacción se repite" → configurar frecuencia
+```
+
+#### Comportamiento Automático
+
+```
+Cron diario (02:00 UTC):
+  1. Buscar recurrencias donde próxima_ejecucion <= TODAY
+  2. Por cada una:
+     a. Crear la transacción real (con recurrente_id = ID recurrencia)
+     b. Actualizar monto_actual de la meta si aplica
+     c. Calcular próxima_ejecucion según frecuencia
+     d. Actualizar ultima_ejecucion
+  3. Si la recurrencia está vencida por más de 30 días:
+     → Marcar como inactiva y notificar al usuario
+```
+
+#### Vista Previa Anticipada
+
+- El dashboard muestra "Próximos gastos recurrentes" con los 3 próximos.
+- El usuario puede saltarse una recurrencia sin desactivarla (skip next).
+- Al crear una transacción manual, el sistema pregunta: "¿Esto se repite?"
+
+### 6.9. Metas de Ahorro
+
+Objetivos de ahorro con seguimiento visual de progreso.
+
+#### Interacción del Usuario
+
+```
+NLP: "Quiero ahorrar 5000 soles para viajar en diciembre"
+  → Crea meta con fecha límite y monto objetivo
+
+NLP: "Ahorré 200 soles para mi viaje"
+  → Registra transacción etiquetada con la meta, actualiza progreso
+```
+
+#### Reglas de Negocio
+
+- El progreso se calcula automáticamente desde transacciones etiquetadas.
+- Al registrar un ingreso, el sistema sugiere: "¿Quieres destinarlo a tu meta 'Viaje'?"
+- Las metas completadas se marcan automáticamente y se ocultan del dashboard activo.
+- Las transacciones recurrentes pueden asociarse a una meta (ej. "cada mes ahorro 200 para el viaje").
+
+#### Visualización
+
+```
+┌─────────────────────────────────────────────┐
+│  🎯 Viaje a la playa              ██████░░░ │
+│     S/ 3,200 / S/ 5,000         64%        │
+│     Faltan: 3 meses                          │
+└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  🚨 Fondo de emergencia          ██░░░░░░░ │
+│     S/ 500 / S/ 3,000           17%        │
+│     Sin fecha límite                        │
+└─────────────────────────────────────────────┘
+```
+
+### 6.10. Importación de Extractos Bancarios
+
+#### Interacción del Usuario
+
+```
+UI: Botón "Importar extracto"
+  → Subir archivo CSV (formato BCP, Interbank, BBVA, etc.)
+  → El sistema parsea y muestra vista previa
+  → Usuario confirma asignación de categorías
+  → Las transacciones se crean en lote
+
+NLP: "Cargué S/ 2000 de sueldo el 1 de julio"
+  → Para casos individuales, el NLP es más rápido que importar
+```
+
+#### Flujo de Importación
+
+```
+1. Usuario sube CSV
+2. Backend parsea según el formato del banco (mapeo de columnas)
+3. Detecta transacciones duplicadas contra existing (por monto + fecha + descripción)
+4. Muestra vista previa: 45 transacciones detectadas, 3 duplicadas
+5. Usuario confirma o ajusta categorías
+6. Se crean las transacciones en lote (dentro de una transacción DB)
+7. Se registra en Actividad: "Importación de BCP — 42 transacciones creadas"
+```
+
+#### Formatos Soportados
+
+| Banco | Formato | Estado |
+|-------|---------|--------|
+| BCP | CSV (descarga web) | ⏳ Pendiente |
+| Interbank | CSV | ⏳ Pendiente |
+| BBVA | CSV | ⏳ Pendiente |
+| Yape | Exportación manual | ⏳ Pendiente |
+| OFX estándar | OFX (usado por muchos bancos) | ⏳ Pendiente |
+
+### 6.11. Registro de Actividad (Historial)
+
+Cada acción importante en el sistema queda registrada y visible para el usuario.
+
+#### Interacción del Usuario
+
+```
+UI: Botón "Actividad" en la barra de navegación
+  → Muestra timeline cronológico inverso
+
+  📅 Hoy 15:30
+    💰 Pago registrado — Préstamo Juan (#3), cuota 4, S/ 300
+    🏦 Transferencia — BCP → Ahorros, S/ 500
+  📅 Ayer
+    ✏️ Transacción editada — "Almuerzo" pasó de S/ 50 a S/ 45
+    ➕ Préstamo creado vía NLP — "Presté 2000 a María"
+  📅 25 jul
+    🔄 Reversión — Pago #12 revertido, motivo: "monto incorrecto"
+```
+
+#### Qué se Registra
+
+| Acción | Visible para | Detalle |
+|--------|-------------|---------|
+| Creación de transacción | Admin | Monto, categoría, cuenta |
+| Pago de préstamo | Admin + Promotor | Cuota, monto, condición aplicada |
+| Edición de transacción | Admin | Campo anterior → campo nuevo |
+| Reversión de pago | Admin | Motivo, pago original |
+| Importación de extracto | Admin | Banco, número de transacciones |
+| Creación vía NLP | Admin | Texto original parseado |
+| Inicio de sesión | Usuario | Dispositivo, IP, ubicación |
+| Cambio de contraseña | Usuario | — |
+| Activación/desactivación 2FA | Usuario | — |
+
+### 6.12. Compartir Gastos (Split)
+
+Dividir un gasto entre varias personas.
+
+#### Interacción del Usuario
+
+```
+NLP: "Pagué 120 soles de cena con Juan y María, dividimos en 3"
+  → Crea gasto de S/ 120 en "Comidas", registra S/ 40 como deuda
+    de Juan y S/ 40 como deuda de María.
+
+NLP: "Juan me pagó los 40 de la cena"
+  → Marca la deuda compartida como pagada.
+```
+
+#### Modelo de Datos (Gastos_Compartidos)
+
+```
+Gastos_Compartidos
+  ├── id (PK)
+  ├── transaccion_id (FK -> Transacciones)
+  ├── pagador_id (FK -> Usuarios, quien pagó)
+  ├── total: NUMBER(12,2)
+  ├── moneda: VARCHAR(3)
+  ├── participantes: JSON (array de { usuario_id, monto, pagado: boolean })
+  ├── liquidado: BOOLEAN DEFAULT FALSE
+  └── created_at
+
+Pagos_Compartidos (cuando un participante paga su parte)
+  ├── id (PK)
+  ├── gasto_compartido_id (FK -> Gastos_Compartidos)
+  ├── deudor_id (FK -> Usuarios)
+  ├── monto_pagado: NUMBER(12,2)
+  ├── fecha_pago: DATE
+  └── created_at
+```
+
+#### Reglas de Negocio
+
+- El gasto compartido se registra como una transacción normal del pagador.
+- Los participantes ven la deuda pendiente en su dashboard.
+- Al liquidar todos los participantes, el gasto se marca como `liquidado = TRUE`.
+- Los gastos compartidos pueden dividirse en partes iguales o montos personalizados.
 
 ---
 
@@ -1672,3 +2039,11 @@ Un endpoint `GET /metrics` expone métricas en formato Prometheus para ser recol
 | **CSRF** | Cross-Site Request Forgery — ataque que fuerza a un usuario autenticado a ejecutar acciones no deseadas |
 | **Pirámide de Pruebas** | Modelo que clasifica las pruebas por granularidad y velocidad (unitarias → integración → E2E) |
 | **Seed Data** | Conjunto de datos precargados para pruebas y desarrollo |
+| **Cuenta / Wallet** | Representación de un lugar donde se almacena dinero (efectivo, banco, ahorros) |
+| **Transferencia** | Movimiento de dinero entre cuentas del mismo usuario |
+| **Deuda Propia** | Obligación financiera del usuario (tarjeta de crédito, préstamo bancario) |
+| **Transacción Recurrente** | Gasto o ingreso que se repite automáticamente en intervalos definidos |
+| **Meta de Ahorro** | Objetivo financiero con monto objetivo y seguimiento de progreso |
+| **Split de Gasto** | División de un gasto entre múltiples participantes |
+| **Extracto Bancario** | Archivo CSV/OFX descargado del banco con el historial de movimientos |
+| **Timeline de Actividad** | Historial cronológico de todas las acciones realizadas en el sistema |
