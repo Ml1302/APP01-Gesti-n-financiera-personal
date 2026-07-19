@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.1 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.2 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo. El diseño prioriza una infraestructura de costo cero, alta disponibilidad mediante contenedores y procesamiento de lenguaje natural (NLP) integrado.
 
@@ -155,7 +155,7 @@ Préstamos
   ├── deudor: VARCHAR
   ├── monto_original: NUMBER(12,2)
   ├── moneda: VARCHAR(3)
-  ├── interes: DECIMAL(5,2) (tasa periódica)
+  ├── interes: DECIMAL(5,2) (tasa periódica base)
   ├── frecuencia_pago: 'diario' | 'semanal' | 'quincenal' | 'mensual'
   ├── cuotas_totales: INT
   ├── cuotas_restantes: INT
@@ -166,12 +166,51 @@ Préstamos
   ├── penalidad_diaria: DECIMAL(5,2) (% de mora por día)
   └── created_at
 
+Condiciones_Prestamo
+  ├── id (PK)
+  ├── prestamo_id (FK -> Préstamos, ON DELETE CASCADE)
+  ├── nombre: VARCHAR (ej. "Descuento por pago anticipado")
+  ├── tipo_condicion: 'pago_anticipado' | 'pago_atrasado' | 'pago_parcial' | 'pago_total_adelantado' | 'fecha_especifica'
+  ├── trigger_campo: 'dias_antes_vencimiento' | 'dias_despues_vencimiento' | 'porcentaje_pagado' | 'cuotas_restantes'
+  ├── trigger_operador: '<' | '<=' | '>' | '>=' | '==' | 'BETWEEN'
+  ├── trigger_valor: VARCHAR (ej. "15" o "10,30" para BETWEEN)
+  ├── efecto_tipo: 'descuento_interes' | 'penalidad_reducida' | 'tasa_fija' | 'sin_interes' | 'bono'
+  ├── efecto_valor: DECIMAL(5,2) (ej. -50 para 50% menos, o 2 para 2% de penalidad)
+  ├── efecto_unidad: 'porcentaje' | 'monto_fijo' | 'tasa_reemplazo'
+  ├── prioridad: INT DEFAULT 0 (mayor prioridad se evalúa primero)
+  ├── activa: BOOLEAN DEFAULT TRUE
+  ├── descripcion: TEXT (texto legible de la condición)
+  └── created_at
+
+  Ejemplos de condiciones almacenadas:
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ "Si paga antes de 15 días, el interés se reduce al 50%"         │
+  │ tipo_condicion='pago_anticipado', trigger_campo=                │
+  │ 'dias_antes_vencimiento', trigger_operador='<=',                │
+  │ trigger_valor='15', efecto_tipo='descuento_interes',            │
+  │ efecto_valor=-50, efecto_unidad='porcentaje'                    │
+  ├──────────────────────────────────────────────────────────────────┤
+  │ "Si paga después de 30 días de vencido, penalidad del 5% diario"│
+  │ tipo_condicion='pago_atrasado', trigger_campo=                  │
+  │ 'dias_despues_vencimiento', trigger_operador='>',               │
+  │ trigger_valor='30', efecto_tipo='penalidad_reducida',           │
+  │ efecto_valor=5, efecto_unidad='porcentaje'                      │
+  ├──────────────────────────────────────────────────────────────────┤
+  │ "Si adelanta el 100% del préstamo, no paga intereses restantes" │
+  │ tipo_condicion='pago_total_adelantado', trigger_campo=          │
+  │ 'porcentaje_pagado', trigger_operador='>=',                     │
+  │ trigger_valor='100', efecto_tipo='sin_interes',                 │
+  │ efecto_valor=100, efecto_unidad='porcentaje'                    │
+  └──────────────────────────────────────────────────────────────────┘
+
 Pagos (Préstamos)
   ├── id (PK)
   ├── prestamo_id (FK -> Préstamos)
+  ├── condicion_aplicada_id (FK -> Condiciones_Prestamo, nullable)
   ├── monto: NUMBER(12,2)
   ├── monto_interes: NUMBER(12,2)
   ├── monto_capital: NUMBER(12,2)
+  ├── tasa_interes_aplicada: DECIMAL(5,2) (tasa efectiva tras evaluar condiciones)
   ├── moneda: VARCHAR(3)
   ├── fecha_pago: DATE
   ├── nro_cuota: INT
@@ -251,6 +290,11 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 | `POST` | `/loans` | Ambos | Registrar préstamo |
 | `GET` | `/loans/:id` | Ambos | Ver detalle de préstamo |
 | `POST` | `/loans/:id/payments` | Ambos | Registrar pago |
+| `GET` | `/loans/:id/conditions` | Ambos | Listar condiciones del préstamo |
+| `POST` | `/loans/:id/conditions` | Admin | Agregar condición |
+| `PUT` | `/loans/:id/conditions/:condId` | Admin | Actualizar condición |
+| `DELETE` | `/loans/:id/conditions/:condId` | Admin | Eliminar condición |
+| `GET` | `/loans/:id/payments/:payId/condition` | Ambos | Ver condición aplicada en un pago |
 | `GET` | `/commissions` | Promotor | Ver comisiones propias |
 | `GET` | `/commissions` | Admin | Ver todas las comisiones |
 | `GET` | `/dashboard/summary` | Admin | Resumen de flujo de caja |
@@ -273,6 +317,8 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 | Préstamos — todos | CRUD completo | ❌ |
 | Préstamos — cartera propia | CRUD completo | CRUD completo |
 | Pagos de préstamos — cartera propia | CRUD completo | Solo registrar |
+| Condiciones de préstamo — cartera propia | CRUD completo | Solo lectura |
+| Condiciones de préstamo — todos | CRUD completo | ❌ |
 | Comisiones propias | Lectura | Lectura |
 | Comisiones de terceros | Lectura | ❌ |
 | Configuración del sistema | CRUD completo | ❌ |
@@ -283,9 +329,10 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 
 ### Reglas de Negocio por Rol
 
-- **Admin:** Puede registrar préstamos en cualquier cartera (asignando un promotor o quedándoselo como propio).
-- **Promotor:** Solo puede registrar préstamos bajo su propio `promotor_id` y ver los suyos.
+- **Admin:** Puede registrar préstamos en cualquier cartera (asignando un promotor o quedándoselo como propio). CRUD completo sobre condiciones de cualquier préstamo.
+- **Promotor:** Solo puede registrar préstamos bajo su propio `promotor_id` y ver los suyos. Puede leer las condiciones de sus préstamos pero no modificarlas.
 - **Comisión:** Se calcula automáticamente al registrar cada pago basado en la `tasa_comision_promotor` de la configuración global.
+- **Condiciones:** Al crear un préstamo vía NLP, las condiciones detectadas se asignan automáticamente. El admin puede crearlas, editarlas o eliminarlas manualmente desde la UI o API.
 
 ---
 
@@ -296,11 +343,13 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 Flujo completo de una interacción NLP:
 
 ```
-Usuario: "Gasté 50 soles en almuerzo hoy"
+Usuario: "Presté 2000 soles a Juan al 5% mensual a 4 cuotas,
+          pero si me paga antes de 15 días el interés baja al 2.5%"
    │
    ▼
 [1] Frontend → POST /nlp/parse
-   │  Body: { text: "Gasté 50 soles en almuerzo hoy" }
+   │  Body: { text: "Presté 2000 soles a Juan al 5% mensual a 4 cuotas,
+   │                  pero si me paga antes de 15 días el interés baja al 2.5%" }
    │
    ▼
 [2] Backend → Google Gemini API
@@ -315,20 +364,54 @@ Usuario: "Gasté 50 soles en almuerzo hoy"
    │       categoria_sugerida: string | null,
    │       fecha: 'YYYY-MM-DD' | null,
    │       deudor: string | null (solo si es préstamo),
+   │       interes: number | null (tasa periódica, solo si es préstamo),
+   │       frecuencia: 'diario' | 'semanal' | 'quincenal' | 'mensual' | null,
+   │       cuotas: number | null,
+   │       condiciones: [
+   │         {
+   │           descripcion: string,
+   │           tipo: 'pago_anticipado' | 'pago_atrasado' |
+   │                 'pago_parcial' | 'pago_total_adelantado' | 'fecha_especifica',
+   │           trigger: {
+   │             campo: 'dias_antes_vencimiento' | 'dias_despues_vencimiento' |
+   │                    'porcentaje_pagado' | 'cuotas_restantes',
+   │             operador: '<' | '<=' | '>' | '>=' | '==',
+   │             valor: string (ej. "15" o "10,30")
+   │           },
+   │           efecto: {
+   │             tipo: 'descuento_interes' | 'penalidad_reducida' |
+   │                   'tasa_fija' | 'sin_interes' | 'bono',
+   │             valor: number,
+   │             unidad: 'porcentaje' | 'monto_fijo' | 'tasa_reemplazo'
+   │           }
+   │         }
+   │       ],
    │       confianza: 0.0-1.0
    │     }
-   │     Texto: 'Gasté 50 soles en almuerzo hoy'"
+   │     Texto: 'Presté 2000 soles a Juan al 5% mensual a 4 cuotas,
+   │             pero si me paga antes de 15 días el interés baja al 2.5%'"
    │
    ▼
 [3] Gemini → JSON response
    │  {
-   │    tipo: 'gasto',
-   │    monto: 50,
+   │    tipo: 'prestamo',
+   │    monto: 2000,
    │    moneda: 'PEN',
-   │    descripcion: 'Almuerzo',
-   │    categoria_sugerida: 'Alimentación',
+   │    descripcion: 'Préstamo a Juan',
    │    fecha: '2026-07-19',
-   │    confianza: 0.95
+   │    deudor: 'Juan',
+   │    interes: 5.0,
+   │    frecuencia: 'mensual',
+   │    cuotas: 4,
+   │    condiciones: [
+   │      {
+   │        descripcion: 'Si paga antes de 15 días, interés baja al 2.5%',
+   │        tipo: 'pago_anticipado',
+   │        trigger: { campo: 'dias_antes_vencimiento', operador: '<=', valor: '15' },
+   │        efecto: { tipo: 'tasa_fija', valor: 2.5, unidad: 'tasa_reemplazo' }
+   │      }
+   │    ],
+   │    confianza: 0.92
    │  }
    │
    ▼
@@ -391,6 +474,106 @@ Comisión = (Monto del pago) * (tasa_comision_promotor / 100)
 - La comisión se acumula en la tabla `Comisiones` con estado `pagada: FALSE`.
 - El dashboard del promotor muestra el total de comisiones pendientes y pagadas.
 - El admin puede marcar comisiones como pagadas desde configuración.
+
+#### Lógica Condicional en Préstamos
+
+Cada préstamo puede tener una o más condiciones definidas en `Condiciones_Prestamo`. Al registrar un pago, el backend evalúa todas las condiciones activas en orden de prioridad y aplica la primera que se cumpla.
+
+##### Motor de Evaluación de Condiciones
+
+```
+Entrada: Pago entrante (monto, fecha_pago, nro_cuota)
+         + Condiciones asociadas al préstamo
+
+1. Calcular días antes/después del vencimiento de la cuota
+2. Calcular porcentaje pagado respecto a la cuota
+3. Obtener condiciones activas ordenadas por prioridad DESC
+4. Para cada condición:
+   a. Evaluar trigger_campo vs trigger_valor usando trigger_operador
+   b. Si se cumple → aplicar efecto_tipo y efecto_valor
+   c. Si no se cumple → pasar a la siguiente condición
+5. Si ninguna condición se cumple → usar la tasa base del préstamo
+6. Registrar el pago con la tasa_interes_aplicada calculada
+```
+
+##### Tipos de Efecto
+
+| Efecto | Descripción | Ejemplo |
+|--------|-------------|---------|
+| `descuento_interes` | Reduce el interés calculado en un % | `efecto_valor=-50` → 50% menos de interés |
+| `penalidad_reducida` | Reemplaza la penalidad diaria estándar | `efecto_valor=2` → 2% diario en vez del valor por defecto |
+| `tasa_fija` | Reemplaza la tasa de interés por una nueva | `efecto_valor=2.5` → interés fijo de 2.5% |
+| `sin_interes` | Elimina el interés de la cuota | `efecto_valor=100` → 0% de interés aplicado |
+| `bono` | Agrega un monto fijo de bonificación | `efecto_valor=50` → S/ 50 de descuento adicional |
+
+##### Ejemplos de Evaluación
+
+```
+Préstamo: S/ 1000, interés 5% mensual, 4 cuotas, cuota = S/ 282.01
+
+Caso A: Pago el día 10 (faltan 5 días para el vencimiento)
+  → Se evalúa condición #1: "pago_anticipado, <=15 días, tasa_fija 2.5%"
+  → Se CUMPLE (5 <= 15)
+  → tasa_interes_aplicada = 2.5%
+  → Cuota recalculada = S/ 265.82 (ahorro de S/ 16.19)
+
+Caso B: Pago el día de vencimiento
+  → Se evalúa condición #1: "pago_anticipado, <=15 días..."
+  → NO se cumple (0 días antes no es < 15... espera, 0 <= 15 SÍ cumple)
+  → **Importante:** La lógica debe definir si el mismo día del
+     vencimiento califica como "anticipado". Por diseño, se considera
+     que "pago_anticipado" requiere al menos 1 día antes
+     (trigger_operador='<' en vez de '<=').
+
+Caso C: Pago 20 días después del vencimiento
+  → Condición #1 falla (pago atrasado, no anticipado)
+  → Condición #2: "pago_atrasado, >15 días, penalidad_reducida 5%"
+  → Se CUMPLE (20 > 15)
+  → penalidad_diaria = 5% (en vez del 3% base)
+  → Interés moratorio = saldo_cuota * 0.05 * 20 días
+
+Caso D: Pago adelantado del 100% del saldo restante (cuota 2 de 4)
+  → Condición #3: "pago_total_adelantado, >=100%, sin_interes"
+  → Se CUMPLE (100 >= 100)
+  → Interés de cuotas restantes = 0
+  → Solo paga capital restante
+```
+
+##### Condiciones Múltiples y Prioridad
+
+- Se pueden definir varias condiciones para un mismo préstamo.
+- El campo `prioridad` determina el orden de evaluación (mayor número = mayor prioridad).
+- Solo se aplica la **primera condición que se cumpla** (no hay acumulación de efectos).
+- Si ninguna condición aplica, se usan los valores base del préstamo.
+
+##### NLP + Condiciones
+
+El flujo NLP extrae condiciones directamente del lenguaje natural:
+
+```
+Usuario: "Presté 1000 soles a María al 3% semanal a 5 cuotas
+           pero si me paga todo antes de un mes le perdono los intereses"
+
+→ Extracción NLP:
+  condiciones: [{
+    descripcion: "Si paga todo antes de un mes, sin interés",
+    tipo: 'pago_total_adelantado',
+    trigger: { campo: 'dias_antes_vencimiento', operador: '<=', valor: '30' },
+    efecto: { tipo: 'sin_interes', valor: 100, unidad: 'porcentaje' }
+  }]
+```
+
+El frontend muestra las condiciones extraídas en la vista previa para que el usuario las confirme o edite antes de guardar.
+
+##### API de Condiciones
+
+| Método | Ruta | Acceso | Descripción |
+|--------|------|--------|-------------|
+| `GET` | `/loans/:id/conditions` | Ambos | Listar condiciones de un préstamo |
+| `POST` | `/loans/:id/conditions` | Admin | Agregar condición a un préstamo |
+| `PUT` | `/loans/:id/conditions/:condId` | Admin | Actualizar condición |
+| `DELETE` | `/loans/:id/conditions/:condId` | Admin | Eliminar condición |
+| `GET` | `/loans/:id/payments/:payId/conditions` | Ambos | Ver qué condición se aplicó en un pago |
 
 ### 6.3. Finanzas Personales
 
@@ -541,3 +724,8 @@ Para una representación visual de la arquitectura, consultar:
 | **Cron Job** | Tarea programada que se ejecuta en intervalos definidos |
 | **Sistema Francés** | Método de amortización de préstamos con cuotas fijas |
 | **Moneda Base** | Divisa principal del usuario contra la que se convierten todas las demás |
+| **Condición de Préstamo** | Regla condicional que modifica el interés o penalidad según el comportamiento de pago |
+| **Trigger** | Evento o umbral que activa una condición (ej. "pago dentro de 15 días") |
+| **Efecto** | Consecuencia de una condición activada (ej. "50% menos de interés") |
+| **Pago Anticipado** | Pago realizado antes de la fecha de vencimiento de una cuota |
+| **Pago Total Adelantado** | Liquidación completa del saldo restante antes del plazo original |
