@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.10 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.11 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo.
 
@@ -75,6 +75,18 @@ El sistema sigue una arquitectura cliente-servidor desacoplada, con comunicació
 3. El cliente incluye `Authorization: Bearer <accessToken>` en cada petición.
 4. Al expirar el access token, el cliente llama a `POST /auth/refresh` con el refresh token.
 5. El backend invalida el refresh token anterior y emite un nuevo par.
+
+#### Registro de Usuarios (Promotores)
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Quién registra** | Solo el Admin (`rol = 'admin'`) puede crear cuentas de promotor |
+| **Método** | `POST /auth/register` con body: `{ email, password, nombre }` |
+| **Validación** | Email único, password ≥ 8 caracteres con mayúscula + número |
+| **Post-creación** | Se envía email de bienvenida con instrucciones de acceso |
+| **Primer login** | El promotor recibe un token de bienvenida que expira en 72h |
+
+No existe registro público (self-signup). El sistema es de uso personal del admin y los promotores que este designe.
 
 #### Gestión de Sesiones
 
@@ -194,9 +206,10 @@ Préstamos
   ├── cuotas_restantes: INT
   ├── saldo_pendiente: NUMBER(12,2)
   ├── fecha_inicio: DATE
-  ├── fecha_proximo_pago: DATE
+  ├── proximo_vencimiento: DATE
   ├── estado: 'activo' | 'pagado' | 'castigado'
   ├── penalidad_diaria: DECIMAL(5,2) (% de mora por día)
+  ├── raw_nlp: TEXT (texto original del NLP)
   ├── version: INT DEFAULT 1 (optimistic lock)
   ├── activo: BOOLEAN DEFAULT TRUE
   ├── deleted_at: TIMESTAMP NULL
@@ -457,6 +470,8 @@ Actividad (Historial de cambios)
   ├── created_at: TIMESTAMP
 ```
 
+> Las tablas `Log_Concurrencia` (§10.2), `Log_Ajustes_Redondeo` (§10.3), y `Log_NLP_Usage` (§11.3) se definen inline en sus respectivas secciones por claridad temática.
+
 ### Modelo Contable (Partida Doble Oculta)
 
 Cada transacción de ingreso o gasto genera automáticamente dos asientos:
@@ -477,7 +492,20 @@ Ejemplo: Ingreso de S/ 2000 "Sueldo"
   Ingreso: Sueldo                      2000
 ```
 
-El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backend crea la contrapartida en una tabla `asientos_contables` oculta, que permite generar reportes contables reales sin exponer complejidad al usuario.
+El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backend crea la contrapartida en una tabla `Asientos_Contables` oculta, que permite generar reportes contables reales sin exponer complejidad al usuario.
+
+```
+Asientos_Contables
+  ├── id (PK)
+  ├── transaccion_id (FK -> Transacciones)
+  ├── cuenta_contable: VARCHAR (ej. "Gasto: Alimentación", "Patrimonio Neto")
+  ├── debe: NUMBER(12,2) DEFAULT 0
+  ├── haber: NUMBER(12,2) DEFAULT 0
+  ├── moneda: VARCHAR(3)
+  └── created_at
+```
+
+> **Nota:** Esta tabla es estrictamente interna. Nunca se expone via API. Se usa exclusivamente para generar reportes contables y cuadres de auditoría.
 
 ---
 
@@ -510,9 +538,13 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 | `POST` | `/loans/:id/conditions` | Admin | Agregar condición |
 | `PUT` | `/loans/:id/conditions/:condId` | Admin | Actualizar condición |
 | `DELETE` | `/loans/:id/conditions/:condId` | Admin | Eliminar condición |
-| `GET` | `/loans/:id/payments/:payId/condition` | Ambos | Ver condición aplicada en un pago |
-| `GET` | `/commissions` | Promotor | Ver comisiones propias |
-| `GET` | `/commissions` | Admin | Ver todas las comisiones |
+| `GET` | `/loans/:id/payments` | Ambos | Listar pagos de un préstamo |
+| `GET` | `/loans/:id/payments/:payId/conditions` | Ambos | Ver condiciones aplicadas en un pago |
+| `DELETE` | `/loans/:id` | Admin | Eliminar préstamo (soft delete) |
+| `PUT` | `/loans/:id/restore` | Admin | Restaurar préstamo eliminado |
+| `GET` | `/commissions` | Ambos | Listar comisiones (Admin: todas; Promotor: propias) |
+
+
 | `GET` | `/dashboard/summary` | Admin | Resumen de flujo de caja |
 | `GET` | `/dashboard/projections` | Admin | Proyecciones financieras |
 | `GET` | `/dashboard/portfolio` | Promotor | Rendimiento de cartera |
@@ -599,6 +631,12 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 | Actividad / Historial | Lectura | ❌ |
 | Importación de extractos | Ejecución | ❌ |
 | Gastos compartidos (split) | CRUD completo | ❌ |
+| Notificaciones | Lectura + marcar leídas | Lectura + marcar leídas |
+| Configuración de notificaciones | CRUD completo | ❌ |
+| Exportación de datos | Ejecución | Ejecución (solo propios) |
+| Tasas de cambio | Lectura | Lectura |
+| Gestión de sesiones | Lectura + cerrar sesiones | ❌ |
+| Registro de usuarios (promotores) | Ejecución | ❌ |
 
 ### Reglas de Negocio por Rol
 
@@ -694,29 +732,39 @@ Usuario: "Presté 2000 soles a Juan al 5% mensual a 4 cuotas,
    │    ],
    │    confianza: 0.92
    │  }
-   │
-   ▼
+    │
+    ▼
 [4] Backend devuelve JSON al frontend
-   │
-   ▼
+    │  {
+    │    tipo: "prestamo",
+    │    monto: 2000, moneda: "PEN",
+    │    deudor: "Juan", interes: 5.0,
+    │    cuotas: 4, confianza: 0.92,
+    │    condiciones: [ ... ]
+    │  }
+    │
+    ▼
 [5] Frontend muestra vista previa:
-   │  ┌──────────────────────────────────┐
-   │  │  Gasto                           │
-   │  │  S/ 50.00 — Almuerzo             │
-   │  │  Categoría: Alimentación         │
-   │  │  Fecha: 19/07/2026               │
-   │  │  ┌──────┐ ┌──────┐              │
-   │  │  │Editar│ │Confirmar│            │
-   │  │  └──────┘ └──────┘              │
-   │  └──────────────────────────────────┘
-   │
-   ▼
-[6] Usuario confirma → POST /transactions
-   │  Crea transacción + asiento contable oculto
-   │
-   ▼
-[7] Transacción registrada + UI actualiza dashboard
+    │  ┌──────────────────────────────────┐
+    │  │  📋 Préstamo                     │
+    │  │  S/ 2,000.00 a Juan              │
+    │  │  Interés: 5% mensual · 4 cuotas  │
+    │  │  Condición: pago ≤15d → 2.5%     │
+    │  │  Fecha: 19/07/2026               │
+    │  │  ┌──────┐ ┌──────┐              │
+    │  │  │Editar│ │Confirmar│            │
+    │  │  └──────┘ └──────┘              │
+    │  └──────────────────────────────────┘
+    │
+    ▼
+[6] Usuario confirma → POST /loans
+    │  Crea préstamo + condiciones asociadas
+    │
+    ▼
+[7] Préstamo registrado + UI actualiza cartera
 ```
+
+> Si el NLP clasifica `tipo: 'gasto'` o `tipo: 'ingreso'`, el paso [6] enruta a `POST /transactions` en lugar de `POST /loans`. La vista previa se adapta al tipo detectado.
 
 #### 6.1.1. Ejemplos NLP por Tipo de Acción
 
@@ -1370,7 +1418,7 @@ Pagos_Compartidos (cuando un participante paga su parte)
 
 - **Variables de entorno:** Todas las credenciales (DB, Gemini API, JWT secret) se inyectan como variables de entorno en el contenedor Docker, nunca en el código fuente.
 - **Principio de mínimo privilegio:** El usuario de la DB solo tiene permisos CRUD sobre las tablas de su esquema; no tiene acceso a tablas del sistema Oracle.
-- **Auditoría:** Tabla `log_auditoria` que registra: `{ usuario_id, accion, entidad, entidad_id, detalle, timestamp }`. Toda operación de escritura (POST, PUT, DELETE) queda registrada.
+- **Auditoría:** La tabla `Actividad` registra cada operación de escritura (POST, PUT, DELETE). Sirve como auditoría interna y como timeline visible al usuario.
 - **Cifrado en reposo:** Oracle Cloud cifra los datos almacenados por defecto (transparent data encryption).
 
 ---
@@ -1518,7 +1566,19 @@ Ejemplo: S/ 100.00 dividido en 3 cuotas
   Cuota 3: 33.34  ← se absorbe la diferencia
 ```
 
-La tabla `log_ajustes_redondeo` registra estos ajustes para auditoría.
+La tabla `Log_Ajustes_Redondeo` registra estos ajustes para auditoría:
+
+```
+Log_Ajustes_Redondeo
+  ├── id (PK)
+  ├── transaccion_id (FK -> Transacciones)
+  ├── cuota_nro: INT
+  ├── monto_teorico: NUMBER(16,6)
+  ├── monto_ajustado: NUMBER(12,2)
+  ├── diferencia: NUMBER(16,6)
+  ├── tipo_ajuste: 'penny_round' | 'ultima_cuota'
+  └── created_at
+```
 
 ### 10.4. Eliminación Segura (Soft Deletes)
 
@@ -1532,6 +1592,9 @@ Ningún registro financiero puede ser eliminado físicamente de la base de datos
 | Comisiones | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
 | Condiciones_Prestamo | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
 | Categorías | `activa: BOOLEAN` | *(no implementado — se reusan)* |
+| Cuentas | `activa: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Transferencias | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
+| Deudas | `activo: BOOLEAN` | `deleted_at: TIMESTAMP NULL` |
 
 #### Comportamiento de API con Soft Delete
 
@@ -1686,8 +1749,20 @@ Texto del usuario (escapado): '...'"
 | **Límite global** | 500 consultas NLP/día en toda la instancia |
 | **Circuit breaker** | Si la tasa de error de Gemini > 20% en una ventana de 5 minutos, el circuito se abre por 10 minutos. Durante ese periodo, NLP informa "servicio no disponible" y sugiere entrada manual. |
 | **Cache de respuestas** | Queries NLP idénticas dentro de los últimos 5 minutos se sirven desde caché en Redis (sin llamar a Gemini). |
-| **Monitoreo** | Tabla `log_nlp_usage`: `{ usuario_id, texto_hash, tokens_usados, costo_estimado, timestamp }`. El admin puede ver el consumo en dashboard. |
+| **Monitoreo** | Tabla `Log_NLP_Usage`: `{ usuario_id, texto_hash, tokens_usados, costo_estimado, timestamp }`. El admin puede ver el consumo en dashboard. |
 | **Alertas** | Si el gasto diario supera el 80% del presupuesto, se notifica al admin. |
+
+```
+Log_NLP_Usage
+  ├── id (PK)
+  ├── usuario_id (FK -> Usuarios)
+  ├── texto_hash: VARCHAR (SHA-256 del texto ingresado)
+  ├── tokens_usados: INT
+  ├── costo_estimado: DECIMAL(10,6)
+  ├── modelo: VARCHAR DEFAULT 'gemini-pro'
+  ├── cache_hit: BOOLEAN DEFAULT FALSE
+  └── created_at
+```
 
 ### 11.4. Sistema de Notificaciones
 
@@ -1727,8 +1802,7 @@ Cada usuario puede configurar sus preferencias desde `Config_Notificaciones`:
 
 | Método | Ruta | Acceso | Descripción |
 |--------|------|--------|-------------|
-| `POST` | `/export/transactions` | Admin | Exportar transacciones en CSV |
-| `POST` | `/export/transactions` | Admin | Exportar transacciones en CSV |
+| `POST` | `/export/transactions` | Admin | Exportar transacciones (CSV) |
 | `POST` | `/export/loans` | Ambos | Exportar cartera de préstamos (CSV o PDF) |
 | `POST` | `/export/commissions` | Promotor | Exportar comisiones propias (CSV) |
 | `POST` | `/export/all` | Admin | Exportar todo el patrimonio (JSON) |

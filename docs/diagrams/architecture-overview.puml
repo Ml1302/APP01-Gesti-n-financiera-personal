@@ -16,6 +16,7 @@ System_Boundary(erp, "Micro-ERP Financiero") {
   ContainerDb(db, "Base de Datos", "Oracle 21c XE", "Almacenamiento de datos financieros")
   Container(cron, "Cron Jobs", "NestJS Scheduler", "Sincronización de tasas, limpieza de tokens")
   Container(nlp_proxy, "NLP Proxy", "NestJS", "Proxy para llamadas a Gemini API")
+  ContainerDb(redis, "Redis Cache", "Redis 7.x", "Cache de NLP, sesiones, colas")
 }
 
 System_Ext(gemini, "Google Gemini API", "NLP / IA")
@@ -37,6 +38,7 @@ Rel(nlp_proxy, gemini, "LLM Query", "HTTPS")
 Rel(api, cron, "Disparo programado")
 Rel(cron, exchangerate, "Consulta diaria", "HTTPS")
 Rel(api, email, "Envío de emails")
+Rel(api, redis, "Cache / Colas", "Redis Protocol")
 
 Rel(webapp, vercel, "Hosting")
 Rel(api, oracle_cloud, "Hosting")

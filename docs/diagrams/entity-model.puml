@@ -72,9 +72,10 @@ entity Prestamos {
   * cuotas_restantes : INT
   * saldo_pendiente : DECIMAL
   * fecha_inicio : DATE
-  fecha_proximo_pago : DATE
+  proximo_vencimiento : DATE
   * estado : ENUM
   penalidad_diaria : DECIMAL
+  raw_nlp : TEXT
   * version : INT
   * activo : BOOLEAN
   deleted_at : TIMESTAMP
@@ -296,6 +297,7 @@ entity Metas_Ahorro {
   * monto_objetivo : DECIMAL
   * moneda : VARCHAR
   * monto_actual : DECIMAL
+  progreso : DECIMAL <<GENERATED>>
   fecha_limite : DATE
   * activa : BOOLEAN
   * completada : BOOLEAN
