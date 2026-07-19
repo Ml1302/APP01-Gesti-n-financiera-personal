@@ -31,6 +31,7 @@ entity Transacciones {
   * id : INT <<PK>>
   --
   * usuario_id : INT <<FK>>
+  * cuenta_id : INT <<FK>>
   * categoria_id : INT <<FK>>
   * tipo : ENUM
   * monto : DECIMAL
@@ -38,6 +39,7 @@ entity Transacciones {
   descripcion : TEXT
   * fecha : DATE
   origen_nlp : BOOLEAN
+  recurrente_id : INT <<FK>>
   raw_nlp : TEXT
   contrapartida_id : INT <<FK>>
   activo : BOOLEAN
@@ -213,6 +215,127 @@ entity Configuraciones {
   * updated_at : TIMESTAMP
 }
 
+entity Cuentas {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * nombre : VARCHAR
+  * tipo : ENUM
+  * moneda : VARCHAR
+  * saldo_inicial : DECIMAL
+  * saldo_actual : DECIMAL
+  icono : VARCHAR
+  * activa : BOOLEAN
+  deleted_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Transferencias {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * cuenta_origen_id : INT <<FK>>
+  * cuenta_destino_id : INT <<FK>>
+  * monto : DECIMAL
+  * moneda : VARCHAR
+  descripcion : VARCHAR
+  * fecha : DATE
+  origen_nlp : BOOLEAN
+  raw_nlp : TEXT
+  * activo : BOOLEAN
+  deleted_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Deudas {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  cuenta_id : INT <<FK>>
+  * acreedor : VARCHAR
+  * tipo : ENUM
+  * monto_original : DECIMAL
+  * moneda : VARCHAR
+  * interes : DECIMAL
+  * frecuencia_pago : ENUM
+  * cuotas_totales : INT
+  * cuotas_restantes : INT
+  * saldo_pendiente : DECIMAL
+  * fecha_inicio : DATE
+  proximo_vencimiento : DATE
+  * estado : ENUM
+  * activo : BOOLEAN
+  deleted_at : TIMESTAMP
+  * created_at : TIMESTAMP
+}
+
+entity Transacciones_Recurrentes {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * cuenta_id : INT <<FK>>
+  categoria_id : INT <<FK>>
+  * tipo : ENUM
+  * monto : DECIMAL
+  * moneda : VARCHAR
+  * descripcion : VARCHAR
+  * frecuencia : ENUM
+  * dia_ejecucion : INT
+  * proxima_ejecucion : DATE
+  ultima_ejecucion : DATE
+  * activa : BOOLEAN
+  * created_at : TIMESTAMP
+}
+
+entity Metas_Ahorro {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  cuenta_id : INT <<FK>>
+  * nombre : VARCHAR
+  * monto_objetivo : DECIMAL
+  * moneda : VARCHAR
+  * monto_actual : DECIMAL
+  fecha_limite : DATE
+  * activa : BOOLEAN
+  * completada : BOOLEAN
+  * created_at : TIMESTAMP
+}
+
+entity Actividad {
+  * id : INT <<PK>>
+  --
+  * usuario_id : INT <<FK>>
+  * tipo : ENUM
+  * entidad : VARCHAR
+  * entidad_id : INT
+  detalle : JSON
+  * origen : ENUM
+  * created_at : TIMESTAMP
+}
+
+entity Gastos_Compartidos {
+  * id : INT <<PK>>
+  --
+  * transaccion_id : INT <<FK>>
+  * pagador_id : INT <<FK>>
+  * total : DECIMAL
+  * moneda : VARCHAR
+  * participantes : JSON
+  * liquidado : BOOLEAN
+  * created_at : TIMESTAMP
+}
+
+entity Pagos_Compartidos {
+  * id : INT <<PK>>
+  --
+  * gasto_compartido_id : INT <<FK>>
+  * deudor_id : INT <<FK>>
+  * monto_pagado : DECIMAL
+  * fecha_pago : DATE
+  * created_at : TIMESTAMP
+}
+
 ' --- Relaciones ---
 
 Usuarios ||--o{ Categorias : tiene
@@ -236,5 +359,24 @@ Prestamos ||--o{ Comisiones : genera
 Pagos ||--o{ Comisiones : genera
 Pagos ||--|| Condiciones_Prestamo : aplica
 Pagos ||--|| Pagos : revierte
+
+Usuarios ||--o{ Cuentas : posee
+Usuarios ||--o{ Deudas : debe
+Usuarios ||--o{ Transacciones_Recurrentes : programa
+Usuarios ||--o{ Metas_Ahorro : define
+Usuarios ||--o{ Actividad : genera
+Usuarios ||--o{ Transferencias : realiza
+
+Cuentas ||--o{ Transacciones : origen
+Cuentas ||--o{ Deudas : asociada
+Cuentas ||--o{ Transacciones_Recurrentes : asociada
+Cuentas ||--o{ Metas_Ahorro : asociada
+Cuentas ||--o{ Transferencias : desde "origen"
+Cuentas ||--o{ Transferencias : hacia "destino"
+
+Transacciones ||--o{ Transacciones_Recurrentes : generada
+Transacciones ||--|| Gastos_Compartidos : se_comparte
+
+Gastos_Compartidos ||--o{ Pagos_Compartidos : tiene_pagos
 
 @enduml
