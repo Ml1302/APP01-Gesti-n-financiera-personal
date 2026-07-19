@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.9 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.10 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo.
 
@@ -2088,15 +2088,16 @@ Push / PR a main:
 | Fase | Versión | Hitos | Estado |
 |------|---------|-------|--------|
 | **Fase 0 — Fundación** | v0.1.0 | Documentación, modelo de datos, configuración del proyecto | ✅ Completado |
-| **Fase 1 — Núcleo Funcional** | v0.2.0 | API REST (CRUD), autenticación JWT, gestión de transacciones, categorías, presupuestos | ⏳ Pendiente |
-| **Fase 2 — Préstamos** | v0.3.0 | Gestión de préstamos, pagos, condiciones, comisiones | ⏳ Pendiente |
-| **Fase 3 — NLP** | v0.4.0 | Integración con Gemini API, prompts, validación, fallback manual | ⏳ Pendiente |
-| **Fase 4 — Dashboard** | v0.5.0 | Dashboards de admin y promotor, proyecciones, exportación de datos | ⏳ Pendiente |
-| **Fase 5 — Multimoneda** | v0.6.0 | Soporte multimoneda, cron de tasas, conversión en dashboard | ⏳ Pendiente |
-| **Fase 6 — Frontend Web** | v0.7.0 | PWA completa, offline sync, notificaciones push | ⏳ Pendiente |
-| **Fase 7 — Madurez** | v0.8.0 | Pruebas E2E, auditoría de seguridad, rendimiento, documentación final | ⏳ Pendiente |
-| **Fase 8 — Mobile** | v1.0.0 | Apps iOS y Android, publicación en stores | 🔮 Futuro |
-| **Fase 9 — Escalabilidad** | v1.1.0 | 2FA, notificaciones email, mejoras de rendimiento | 🔮 Futuro |
+| **Fase 1 — Núcleo Funcional** | v0.2.0 | API REST (CRUD), autenticación JWT, cuentas, transacciones, transferencias, categorías, presupuestos, recurrencias, metas de ahorro, actividad | ⏳ Pendiente |
+| **Fase 2 — Préstamos y Deudas** | v0.3.0 | Gestión de préstamos, pagos, condiciones, comisiones, deudas propias, cronograma de amortización | ⏳ Pendiente |
+| **Fase 3 — NLP** | v0.4.0 | Integración con Gemini API, prompts (8 tipos), validación, fallback manual, circuit breaker | ⏳ Pendiente |
+| **Fase 4 — Dashboard** | v0.5.0 | Dashboards de admin y promotor, proyecciones, exportación, importación de extractos bancarios | ⏳ Pendiente |
+| **Fase 5 — Gastos Compartidos** | v0.5.5 | Splits, pagos entre participantes, liquidación automática | ⏳ Pendiente |
+| **Fase 6 — Multimoneda** | v0.6.0 | Soporte multimoneda, cron de tasas, conversión en dashboard | ⏳ Pendiente |
+| **Fase 7 — Frontend Web** | v0.7.0 | PWA completa, offline sync, notificaciones push, 2FA, CSRF | ⏳ Pendiente |
+| **Fase 8 — Madurez** | v0.8.0 | Pruebas E2E, auditoría de seguridad, rendimiento, i18n (EN/PT), completar documentación final | ⏳ Pendiente |
+| **Fase 9 — Mobile** | v1.0.0 | Apps iOS y Android, publicación en stores | 🔮 Futuro |
+| **Fase 10 — Escalabilidad** | v1.1.0 | Mejoras de rendimiento, monitoreo avanzado, multiinquilino, versión pública | 🔮 Futuro |
 
 ---
 
