@@ -1,6 +1,6 @@
 # Arquitectura y Requerimientos: Micro-ERP Financiero
 
-> **Versión del documento:** 1.7 · **Última actualización:** 2026-07-19
+> **Versión del documento:** 1.8 · **Última actualización:** 2026-07-19
 
 Este documento detalla la arquitectura del sistema y los requerimientos funcionales para el gestor financiero colaborativo.
 
@@ -535,6 +535,40 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 | `POST` | `/export/commissions` | Promotor | Exportar comisiones (CSV) |
 | `POST` | `/export/all` | Admin | Exportar todo (JSON) |
 | `GET` | `/export/:id/download` | Ambos | Descargar archivo exportado |
+| `GET` | `/accounts` | Admin | Listar cuentas |
+| `POST` | `/accounts` | Admin | Crear cuenta |
+| `GET` | `/accounts/:id` | Admin | Ver cuenta con saldo |
+| `PUT` | `/accounts/:id` | Admin | Editar cuenta (nombre, icono) |
+| `DELETE` | `/accounts/:id` | Admin | Desactivar cuenta |
+| `GET` | `/transfers` | Admin | Listar transferencias |
+| `POST` | `/transfers` | Admin | Crear transferencia entre cuentas |
+| `GET` | `/transfers/:id` | Admin | Ver transferencia |
+| `POST` | `/accounts/:id/recalculate` | Admin | Recalcular saldo de cuenta |
+| `GET` | `/debts` | Admin | Listar deudas propias |
+| `POST` | `/debts` | Admin | Registrar deuda |
+| `GET` | `/debts/:id` | Admin | Ver detalle de deuda |
+| `PUT` | `/debts/:id` | Admin | Actualizar deuda |
+| `POST` | `/debts/:id/payments` | Admin | Pagar cuota de deuda |
+| `GET` | `/debts/:id/amortization` | Admin | Ver cronograma de pagos |
+| `GET` | `/recurring-transactions` | Admin | Listar transacciones recurrentes |
+| `POST` | `/recurring-transactions` | Admin | Crear recurrencia |
+| `PUT` | `/recurring-transactions/:id` | Admin | Editar recurrencia |
+| `DELETE` | `/recurring-transactions/:id` | Admin | Desactivar recurrencia |
+| `POST` | `/recurring-transactions/:id/skip` | Admin | Saltar próxima ejecución sin desactivar |
+| `GET` | `/savings-goals` | Admin | Listar metas de ahorro |
+| `POST` | `/savings-goals` | Admin | Crear meta |
+| `GET` | `/savings-goals/:id` | Admin | Ver progreso de meta |
+| `PUT` | `/savings-goals/:id` | Admin | Actualizar meta |
+| `POST` | `/savings-goals/:id/contribute` | Admin | Aportar a meta (crea transacción) |
+| `DELETE` | `/savings-goals/:id` | Admin | Eliminar meta |
+| `GET` | `/activity` | Admin | Listar historial de actividad (timeline) |
+| `GET` | `/activity/:entity/:entityId` | Admin | Ver historial de una entidad específica |
+| `POST` | `/import/bank-statement` | Admin | Importar extracto bancario (CSV) |
+| `POST` | `/import/preview` | Admin | Vista previa de importación sin guardar |
+| `POST` | `/split-expenses` | Admin | Crear gasto compartido |
+| `GET` | `/split-expenses` | Admin | Listar gastos compartidos |
+| `GET` | `/split-expenses/:id` | Admin | Ver detalle del split |
+| `POST` | `/split-expenses/:id/pay` | Admin | Registrar pago de participante |
 
 ---
 
@@ -557,6 +591,14 @@ El usuario solo ve una línea simple ("Gasté S/ 50 en Alimentación"). El backe
 | NLP | Uso completo | Uso completo |
 | Dashboard global | Lectura | ❌ |
 | Dashboard cartera propia | Lectura | Lectura |
+| Cuentas (wallets) | CRUD completo | ❌ |
+| Transferencias entre cuentas | CRUD completo | ❌ |
+| Deudas propias | CRUD completo | ❌ |
+| Transacciones recurrentes | CRUD completo | ❌ |
+| Metas de ahorro | CRUD completo | ❌ |
+| Actividad / Historial | Lectura | ❌ |
+| Importación de extractos | Ejecución | ❌ |
+| Gastos compartidos (split) | CRUD completo | ❌ |
 
 ### Reglas de Negocio por Rol
 
@@ -585,10 +627,12 @@ Usuario: "Presté 2000 soles a Juan al 5% mensual a 4 cuotas,
    ▼
 [2] Backend → Google Gemini API
    │  Prompt:
-   │    "Clasifica el siguiente texto financiero.
-   │     Responde SOLO con JSON:
-   │     {
-   │       tipo: 'gasto' | 'ingreso' | 'prestamo' | 'pago_prestamo' | 'no_clasificado',
+    │    "Clasifica el siguiente texto financiero.
+    │     Responde SOLO con JSON:
+    │     {
+    │       tipo: 'gasto' | 'ingreso' | 'prestamo' | 'pago_prestamo' |
+    │             'transferencia' | 'deuda' | 'pago_deuda' | 'meta_ahorro' |
+    │             'split' | 'recurrente' | 'no_clasificado',
    │       monto: number | null,
    │       moneda: 'PEN' | 'USD' | ... | null,
    │       descripcion: string,
@@ -597,8 +641,14 @@ Usuario: "Presté 2000 soles a Juan al 5% mensual a 4 cuotas,
    │       deudor: string | null (solo si es préstamo),
    │       interes: number | null (tasa periódica, solo si es préstamo),
    │       frecuencia: 'diario' | 'semanal' | 'quincenal' | 'mensual' | null,
-   │       cuotas: number | null,
-   │       condiciones: [
+    │       cuotas: number | null,
+    │       cuenta_destino: string | null (solo si es transferencia, ej. "Ahorros"),
+    │       cuenta_origen: string | null (solo si es transferencia, ej. "BCP"),
+    │       acreedor: string | null (solo si es deuda, ej. "Banco BCP"),
+    │       meta_nombre: string | null (solo si es meta_ahorro, ej. "viaje"),
+    │       participantes: [ string ] | null (solo si es split, ej. ["Juan","María"]),
+    │       repeticion: string | null (solo si es recurrente, ej. "cada mes"),
+    │       condiciones: [
    │         {
    │           descripcion: string,
    │           tipo: 'pago_anticipado' | 'pago_atrasado' |
